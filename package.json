@@ -10,18 +10,18 @@
   },
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "require": "./dist/index.js",
-      "import": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "import": "./dist/index.mjs"
     },
     "./register": {
       "require": "./dist/register.js",
       "import": "./dist/register.mjs"
     },
     "./track": {
+      "types": "./dist/track.d.ts",
       "require": "./dist/track.js",
-      "import": "./dist/track.mjs",
-      "types": "./dist/track.d.ts"
+      "import": "./dist/track.mjs"
     }
   },
   "files": ["dist", "scripts"],

@@ -6,6 +6,7 @@ program
   .name('burn0')
   .description('Lightweight cost observability for every API call in your stack')
   .version('0.1.0')
+  .enablePositionalOptions()
 
 program
   .command('init')

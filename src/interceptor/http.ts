@@ -16,15 +16,28 @@ function wrapRequest(original: typeof http.request, onEvent: EventCallback): typ
     const req = original.apply(this, args)
     const startTime = Date.now()
 
-    const options = typeof args[0] === 'string' ? new URL(args[0]) :
-                    args[0] instanceof URL ? args[0] : args[0]
-    const hostname = 'hostname' in options ? (options.hostname ?? options.host ?? '') : options.hostname ?? ''
+    const firstArg = args[0]
+    let hostname = ''
+    let endpoint = '/'
+
+    if (typeof firstArg === 'string') {
+      try {
+        const parsed = new URL(firstArg)
+        hostname = parsed.hostname
+        endpoint = parsed.pathname
+      } catch {}
+    } else if (firstArg instanceof URL) {
+      hostname = firstArg.hostname
+      endpoint = firstArg.pathname
+    } else if (firstArg && typeof firstArg === 'object') {
+      hostname = (firstArg as http.RequestOptions).hostname ?? (firstArg as http.RequestOptions).host ?? ''
+      endpoint = (firstArg as http.RequestOptions).path ?? '/'
+    }
+
     const cleanHostname = hostname.replace(/:\d+$/, '')
     const service = identifyService(cleanHostname)
 
     if (!service) return req
-
-    const endpoint = ('pathname' in options ? options.pathname : options.path) ?? '/'
 
     req.on('response', (res: http.IncomingMessage) => {
       const isJson = res.headers['content-type']?.includes('application/json')
