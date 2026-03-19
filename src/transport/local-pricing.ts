@@ -21,6 +21,7 @@ const LLM_PRICES: Record<string, Record<string, [number, number]>> = {
     'claude-opus-4-6': [5.00, 25.00],
     'claude-sonnet-4-6': [3.00, 15.00],
     'claude-haiku-4-5': [1.00, 5.00],
+    'claude-haiku-4': [1.00, 5.00],
     'claude-3-5-sonnet': [3.00, 15.00],
     'claude-3-5-haiku': [0.80, 4.00],
     'claude-3-opus': [15.00, 75.00],
