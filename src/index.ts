@@ -11,7 +11,7 @@ import { shipEvents } from './transport/api'
 import { logEvent, formatProcessSummary } from './transport/logger'
 import type { Burn0Event } from './types'
 
-const BURN0_API_URL = 'https://api.burn0.dev'
+const BURN0_API_URL = process.env.BURN0_API_URL ?? 'https://api.burn0.dev'
 
 const apiKey = getApiKey()
 const mode = detectMode({ isTTY: isTTY(), apiKey })
