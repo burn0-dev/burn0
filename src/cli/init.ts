@@ -8,7 +8,15 @@ import type { ServiceConfig } from '../types'
 
 export async function runInit(): Promise<void> {
   const cwd = process.cwd()
-  console.log(chalk.dim('\n🔍 Scanning your project...\n'))
+
+  console.log('')
+  console.log(chalk.bold.cyan('  ╔══════════════════════════════════════════╗'))
+  console.log(chalk.bold.cyan('  ║') + chalk.bold('   burn0 — API Cost Tracking              ') + chalk.bold.cyan('║'))
+  console.log(chalk.bold.cyan('  ║') + chalk.dim('   Track every API call. Know your costs.  ') + chalk.bold.cyan('║'))
+  console.log(chalk.bold.cyan('  ╚══════════════════════════════════════════╝'))
+  console.log('')
+
+  console.log(chalk.dim('  Scanning your project...\n'))
 
   const services = detectServices(cwd)
 
@@ -16,13 +24,16 @@ export async function runInit(): Promise<void> {
     console.log(chalk.yellow('  No known API services found in package.json.'))
     console.log(chalk.dim('  burn0 will still track any outgoing HTTP calls.\n'))
   } else {
-    console.log(`  Found ${services.length} services in package.json:`)
+    console.log(chalk.bold(`  Detected ${services.length} services:\n`))
+    console.log(chalk.dim('  ┌──────────────────────────────────────────────┐'))
     for (const svc of services) {
-      const label = svc.autopriced ? chalk.green('✓') : chalk.yellow('◆')
-      const category = svc.category === 'llm' ? 'LLM (auto-priced)' :
-                       svc.autopriced ? 'API (auto-priced)' : 'API (plan needed)'
-      console.log(`    ${label} ${svc.package.padEnd(25)} → ${category}`)
+      const label = svc.autopriced ? chalk.green('  ✓') : chalk.yellow('  ◆')
+      const category = svc.category === 'llm' ? chalk.blue('LLM') :
+                       svc.autopriced ? chalk.magenta('API') : chalk.yellow('API')
+      const pricing = svc.autopriced ? chalk.dim('auto-priced') : chalk.yellow('plan needed')
+      console.log(`${label}  ${svc.package.padEnd(25)} ${category}  ${pricing}`)
     }
+    console.log(chalk.dim('  └──────────────────────────────────────────────┘'))
     console.log()
   }
 
@@ -90,13 +101,24 @@ export async function runInit(): Promise<void> {
     if (addEnv) ensureGitignore(cwd, '.env')
   }
 
-  console.log(chalk.green('\n  ✓ Config written to .burn0/config.json'))
+  console.log('')
+  console.log(chalk.green('  ✓ Config written to .burn0/config.json'))
   console.log(chalk.green('  ✓ Added .burn0/ to .gitignore'))
-  console.log(chalk.dim("\n  Add this to your app entry point:\n"))
-  console.log(chalk.cyan("    import 'burn0'\n"))
-  console.log(chalk.dim('  Want per-feature tracking? Use:\n'))
-  console.log(chalk.cyan("    import { track } from 'burn0'"))
-  console.log(chalk.cyan("    track('feature', { userId }, async () => { ... })\n"))
+  console.log('')
+  console.log(chalk.bold('  ┌──────────────────────────────────────────────┐'))
+  console.log(chalk.bold('  │') + chalk.dim('  Next steps:                                ') + chalk.bold('│'))
+  console.log(chalk.bold('  │                                              │'))
+  console.log(chalk.bold('  │') + chalk.cyan("  1. Add to your app entry point:            ") + chalk.bold('│'))
+  console.log(chalk.bold('  │') + chalk.white("     import 'burn0'                          ") + chalk.bold('│'))
+  console.log(chalk.bold('  │                                              │'))
+  console.log(chalk.bold('  │') + chalk.cyan('  2. Optional — track specific features:     ') + chalk.bold('│'))
+  console.log(chalk.bold('  │') + chalk.white("     import { track } from 'burn0'           ") + chalk.bold('│'))
+  console.log(chalk.bold('  │') + chalk.white("     track('feat', { userId }, async () => {})") + chalk.bold('│'))
+  console.log(chalk.bold('  │                                              │'))
+  console.log(chalk.bold('  │') + chalk.cyan('  3. Check your costs:                       ') + chalk.bold('│'))
+  console.log(chalk.bold('  │') + chalk.white('     burn0 report                            ') + chalk.bold('│'))
+  console.log(chalk.bold('  └──────────────────────────────────────────────┘'))
+  console.log('')
 }
 
 function writeApiKeyToEnv(cwd: string, apiKey: string): void {

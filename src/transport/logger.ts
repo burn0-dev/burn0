@@ -1,24 +1,45 @@
 import type { Burn0Event } from '../types'
 
+const DIM = '\x1b[2m'
+const RESET = '\x1b[0m'
+const CYAN = '\x1b[36m'
+const GREEN = '\x1b[32m'
+const YELLOW = '\x1b[33m'
+const WHITE = '\x1b[37m'
+const BOLD = '\x1b[1m'
+
+let headerPrinted = false
+
 function formatTokens(count: number): string {
   if (count >= 1000) return `${(count / 1000).toFixed(1)}K`
   return count.toString()
 }
 
+function printHeader(): void {
+  if (headerPrinted) return
+  headerPrinted = true
+  process.stdout.write(`\n${DIM}  burn0 ──────────────────────────────────────────────────────────${RESET}\n`)
+  process.stdout.write(`${DIM}  TIME       SERVICE        MODEL/ENDPOINT     TOKENS              ${RESET}\n`)
+  process.stdout.write(`${DIM}  ─────────────────────────────────────────────────────────────────${RESET}\n`)
+}
+
 export function formatEventLine(event: Burn0Event): string {
-  const parts: string[] = []
   const time = new Date(event.timestamp).toLocaleTimeString('en-US', { hour12: false })
-  parts.push(time.padEnd(10))
-  parts.push(event.service.padEnd(14))
-  if (event.model) {
-    parts.push(event.model.padEnd(18))
-  } else {
-    parts.push(event.endpoint.padEnd(18))
-  }
+
+  const service = event.service.length > 12
+    ? event.service.substring(0, 12) + '..'
+    : event.service
+
+  const modelOrEndpoint = event.model
+    ? event.model.length > 22 ? event.model.substring(0, 22) + '..' : event.model
+    : event.endpoint.length > 22 ? event.endpoint.substring(0, 22) + '..' : event.endpoint
+
+  let tokens = ''
   if (event.tokens_in !== undefined && event.tokens_out !== undefined) {
-    parts.push(`(${formatTokens(event.tokens_in)} in · ${formatTokens(event.tokens_out)} out)`)
+    tokens = `${formatTokens(event.tokens_in)} in  ${formatTokens(event.tokens_out)} out`
   }
-  return parts.join('')
+
+  return `${DIM}${time}${RESET}  ${CYAN}${service.padEnd(14)}${RESET} ${WHITE}${modelOrEndpoint.padEnd(24)}${RESET} ${GREEN}${tokens}${RESET}`
 }
 
 export function formatProcessSummary(events: Burn0Event[], uptimeSeconds: number): string {
@@ -43,5 +64,6 @@ export function formatProcessSummary(events: Burn0Event[], uptimeSeconds: number
 }
 
 export function logEvent(event: Burn0Event): void {
-  process.stdout.write(` ${formatEventLine(event)}\n`)
+  printHeader()
+  process.stdout.write(`  ${formatEventLine(event)}\n`)
 }

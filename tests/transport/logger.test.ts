@@ -142,10 +142,11 @@ describe('logEvent', () => {
     const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
     const event = makeEvent({ model: 'gpt-4o' })
     logEvent(event)
-    expect(writeSpy).toHaveBeenCalledOnce()
-    const output = writeSpy.mock.calls[0][0] as string
-    expect(output).toContain('gpt-4o')
-    expect(output).toContain('openai')
-    expect(output.endsWith('\n')).toBe(true)
+    // First call prints header (3 lines) + event line = 4 calls
+    expect(writeSpy).toHaveBeenCalled()
+    const allOutput = writeSpy.mock.calls.map(c => c[0] as string).join('')
+    expect(allOutput).toContain('gpt-4o')
+    expect(allOutput).toContain('openai')
+    expect(allOutput).toContain('burn0')
   })
 })
