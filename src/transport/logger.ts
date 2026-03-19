@@ -1,4 +1,5 @@
 import type { Burn0Event } from '../types'
+import { estimateLocalCost } from './local-pricing'
 
 const DIM = '\x1b[2m'
 const RESET = '\x1b[0m'
@@ -7,39 +8,60 @@ const GREEN = '\x1b[32m'
 const YELLOW = '\x1b[33m'
 const WHITE = '\x1b[37m'
 const BOLD = '\x1b[1m'
+const ORANGE = '\x1b[38;2;250;93;25m' // #FA5D19
 
 let headerPrinted = false
+let sessionTotal = 0
+let eventCount = 0
 
 function formatTokens(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`
   if (count >= 1000) return `${(count / 1000).toFixed(1)}K`
   return count.toString()
+}
+
+function formatCost(cost: number): string {
+  if (cost >= 1) return `$${cost.toFixed(2)}`
+  if (cost >= 0.01) return `$${cost.toFixed(4)}`
+  if (cost >= 0.0001) return `$${cost.toFixed(6)}`
+  return `$${cost.toFixed(8)}`
 }
 
 function printHeader(): void {
   if (headerPrinted) return
   headerPrinted = true
-  process.stdout.write(`\n${DIM}  burn0 ──────────────────────────────────────────────────────────${RESET}\n`)
-  process.stdout.write(`${DIM}  TIME       SERVICE        MODEL/ENDPOINT     TOKENS              ${RESET}\n`)
-  process.stdout.write(`${DIM}  ─────────────────────────────────────────────────────────────────${RESET}\n`)
+  process.stdout.write(`\n`)
+  process.stdout.write(`  ${ORANGE}${BOLD}burn0${RESET} ${DIM}tracking costs...${RESET}\n`)
+  process.stdout.write(`  ${DIM}─────────────────────────────────────────────────────────────────────${RESET}\n`)
+  process.stdout.write(`  ${DIM}  SERVICE         MODEL / ENDPOINT          TOKENS            COST${RESET}\n`)
+  process.stdout.write(`  ${DIM}─────────────────────────────────────────────────────────────────────${RESET}\n`)
 }
 
 export function formatEventLine(event: Burn0Event): string {
-  const time = new Date(event.timestamp).toLocaleTimeString('en-US', { hour12: false })
-
-  const service = event.service.length > 12
-    ? event.service.substring(0, 12) + '..'
+  const service = event.service.length > 13
+    ? event.service.substring(0, 13) + '..'
     : event.service
 
   const modelOrEndpoint = event.model
-    ? event.model.length > 22 ? event.model.substring(0, 22) + '..' : event.model
-    : event.endpoint.length > 22 ? event.endpoint.substring(0, 22) + '..' : event.endpoint
+    ? event.model.length > 25 ? event.model.substring(0, 25) + '..' : event.model
+    : event.endpoint.length > 25 ? event.endpoint.substring(0, 25) + '..' : event.endpoint
 
   let tokens = ''
   if (event.tokens_in !== undefined && event.tokens_out !== undefined) {
-    tokens = `${formatTokens(event.tokens_in)} in  ${formatTokens(event.tokens_out)} out`
+    tokens = `${formatTokens(event.tokens_in)}→${formatTokens(event.tokens_out)}`
   }
 
-  return `${DIM}${time}${RESET}  ${CYAN}${service.padEnd(14)}${RESET} ${WHITE}${modelOrEndpoint.padEnd(24)}${RESET} ${GREEN}${tokens}${RESET}`
+  const cost = estimateLocalCost(event)
+  let costStr = ''
+  if (cost !== null && cost > 0) {
+    costStr = `${GREEN}${formatCost(cost)}${RESET}`
+  } else if (cost === 0) {
+    costStr = `${DIM}free${RESET}`
+  } else {
+    costStr = `${DIM}--${RESET}`
+  }
+
+  return `  ${CYAN}${service.padEnd(15)}${RESET} ${WHITE}${modelOrEndpoint.padEnd(27)}${RESET} ${DIM}${tokens.padEnd(15)}${RESET}  ${costStr}`
 }
 
 export function formatProcessSummary(events: Burn0Event[], uptimeSeconds: number): string {
@@ -65,5 +87,19 @@ export function formatProcessSummary(events: Burn0Event[], uptimeSeconds: number
 
 export function logEvent(event: Burn0Event): void {
   printHeader()
-  process.stdout.write(`  ${formatEventLine(event)}\n`)
+
+  const cost = estimateLocalCost(event)
+  if (cost !== null && cost > 0) {
+    sessionTotal += cost
+  }
+  eventCount++
+
+  process.stdout.write(`${formatEventLine(event)}\n`)
+
+  // Print running total every 5 events or when cost is significant
+  if (eventCount % 5 === 0 || (cost !== null && cost > 0.01)) {
+    process.stdout.write(`  ${DIM}─────────────────────────────────────────────────────────────────────${RESET}\n`)
+    process.stdout.write(`  ${DIM}  session total: ${RESET}${ORANGE}${BOLD}${formatCost(sessionTotal)}${RESET}${DIM} (${eventCount} calls)${RESET}\n`)
+    process.stdout.write(`  ${DIM}─────────────────────────────────────────────────────────────────────${RESET}\n`)
+  }
 }

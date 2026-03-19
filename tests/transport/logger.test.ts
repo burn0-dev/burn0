@@ -35,8 +35,6 @@ describe('formatEventLine', () => {
     const line = formatEventLine(event)
     expect(line).toContain('500')
     expect(line).toContain('250')
-    expect(line).toContain('in')
-    expect(line).toContain('out')
   })
 
   it('formats large token counts with K suffix', () => {
@@ -52,11 +50,10 @@ describe('formatEventLine', () => {
     expect(line).not.toContain('in ·')
   })
 
-  it('includes time in output', () => {
+  it('includes service name in output', () => {
     const event = makeEvent({ timestamp: '2024-01-15T14:30:00.000Z' })
     const line = formatEventLine(event)
-    // Should contain a time-like string (HH:MM:SS)
-    expect(line).toMatch(/\d{2}:\d{2}:\d{2}/)
+    expect(line).toContain('openai')
   })
 })
 
