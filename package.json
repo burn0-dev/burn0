@@ -1,0 +1,52 @@
+{
+  "name": "burn0",
+  "version": "0.1.0",
+  "description": "Lightweight cost observability for every API call in your stack",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "burn0": "./dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.ts"
+    },
+    "./register": {
+      "require": "./dist/register.js",
+      "import": "./dist/register.mjs"
+    },
+    "./track": {
+      "require": "./dist/track.js",
+      "import": "./dist/track.mjs",
+      "types": "./dist/track.d.ts"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["cost", "observability", "llm", "api", "tracking", "openai", "anthropic"],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "tsup": "^8.0.0",
+    "vitest": "^3.0.0",
+    "@types/node": "^22.0.0"
+  },
+  "dependencies": {
+    "commander": "^13.0.0",
+    "@inquirer/prompts": "^7.0.0",
+    "chalk": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
