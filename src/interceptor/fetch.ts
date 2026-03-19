@@ -23,11 +23,19 @@ export function patchFetch(onEvent: EventCallback): void {
     }
 
     let model: string | undefined
+
+    // Extract model from request body (OpenAI, Anthropic, etc.)
     if (init?.body && typeof init.body === 'string') {
       try {
         const parsed = JSON.parse(init.body)
         if (parsed.model) model = parsed.model
       } catch {}
+    }
+
+    // Extract model from URL path (Gemini-style: /v1beta/models/gemini-2.0-flash:generateContent)
+    if (!model) {
+      const modelMatch = url.pathname.match(/\/models\/([^/:]+)/)
+      if (modelMatch) model = modelMatch[1]
     }
 
     const response = await originalFetch!(input, init)
@@ -80,9 +88,15 @@ export function patchFetch(onEvent: EventCallback): void {
       try {
         const cloned = response.clone()
         const body = await cloned.json()
+        // Standard format (OpenAI, Anthropic, Perplexity)
         if (body.usage) {
           tokensIn = body.usage.prompt_tokens ?? body.usage.input_tokens
           tokensOut = body.usage.completion_tokens ?? body.usage.output_tokens
+        }
+        // Gemini format
+        if (body.usageMetadata) {
+          tokensIn = body.usageMetadata.promptTokenCount
+          tokensOut = body.usageMetadata.candidatesTokenCount
         }
         if (body.model) model = body.model
       } catch {}
