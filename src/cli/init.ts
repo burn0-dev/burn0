@@ -9,24 +9,25 @@ import type { ServiceConfig } from '../types'
 export async function runInit(): Promise<void> {
   const cwd = process.cwd()
 
+  const o = chalk.hex('#FA5D19')
   const banner = `
-  ${chalk.cyan('bbbbbbbb')}
-  ${chalk.cyan('b::::::b')}                                                                        ${chalk.cyan('000000000')}
-  ${chalk.cyan('b::::::b')}                                                                      ${chalk.cyan('00:::::::::00')}
-  ${chalk.cyan('b::::::b')}                                                                    ${chalk.cyan('00:::::::::::::00')}
-  ${chalk.cyan(' b:::::b')}                                                                   ${chalk.cyan('0:::::::000:::::::0')}
-  ${chalk.cyan(' b:::::bbbbbbbbb')}    ${chalk.white('uuuuuu    uuuuuu')} ${chalk.white('rrrrr   rrrrrrrrr')}   ${chalk.white('nnnn  nnnnnnnn')}    ${chalk.cyan('0::::::0   0::::::0')}
-  ${chalk.cyan(' b::::::::::::::bb')}  ${chalk.white('u::::u    u::::u')} ${chalk.white('r::::rrr:::::::::r')}  ${chalk.white('n:::nn::::::::nn')}  ${chalk.cyan('0:::::0     0:::::0')}
-  ${chalk.cyan(' b::::::::::::::::b')} ${chalk.white('u::::u    u::::u')} ${chalk.white('r:::::::::::::::::r')} ${chalk.white('n::::::::::::::nn')} ${chalk.cyan('0:::::0     0:::::0')}
-  ${chalk.cyan(' b:::::bbbbb:::::::b')}${chalk.white('u::::u    u::::u')} ${chalk.white('rr::::::rrrrr::::::r')}${chalk.white('nn:::::::::::::::n')}${chalk.cyan('0:::::0 000 0:::::0')}
-  ${chalk.cyan(' b:::::b    b::::::b')}${chalk.white('u::::u    u::::u')}  ${chalk.white('r:::::r     r:::::r')}  ${chalk.white('n:::::nnnn:::::n')}${chalk.cyan('0:::::0 000 0:::::0')}
-  ${chalk.cyan(' b:::::b     b:::::b')}${chalk.white('u::::u    u::::u')}  ${chalk.white('r:::::r     rrrrrrr')}  ${chalk.white('n::::n    n::::n')}${chalk.cyan('0:::::0     0:::::0')}
-  ${chalk.cyan(' b:::::b     b:::::b')}${chalk.white('u::::u    u::::u')}  ${chalk.white('r:::::r')}              ${chalk.white('n::::n    n::::n')}${chalk.cyan('0:::::0     0:::::0')}
-  ${chalk.cyan(' b:::::b     b:::::b')}${chalk.white('u:::::uuuu:::::u')}  ${chalk.white('r:::::r')}              ${chalk.white('n::::n    n::::n')}${chalk.cyan('0::::::0   0::::::0')}
-  ${chalk.cyan(' b:::::bbbbbb::::::b')}${chalk.white('u:::::::::::::::uu')}${chalk.white('r:::::r')}              ${chalk.white('n::::n    n::::n')}${chalk.cyan('0:::::::000:::::::0')}
-  ${chalk.cyan(' b::::::::::::::::b')}  ${chalk.white('u:::::::::::::::u')}${chalk.white('r:::::r')}              ${chalk.white('n::::n    n::::n')} ${chalk.cyan('00:::::::::::::00')}
-  ${chalk.cyan(' b:::::::::::::::b')}    ${chalk.white('uu::::::::uu:::u')}${chalk.white('r:::::r')}              ${chalk.white('n::::n    n::::n')}   ${chalk.cyan('00:::::::::00')}
-  ${chalk.cyan(' bbbbbbbbbbbbbbbb')}       ${chalk.white('uuuuuuuu  uuuu')}${chalk.white('rrrrrrr')}              ${chalk.white('nnnnnn    nnnnnn')}     ${chalk.cyan('000000000')}
+  ${'bbbbbbbb'}
+  ${'b::::::b'}                                                                        ${o('000000000')}
+  ${'b::::::b'}                                                                      ${o('00:::::::::00')}
+  ${'b::::::b'}                                                                    ${o('00:::::::::::::00')}
+  ${' b:::::b'}                                                                   ${o('0:::::::000:::::::0')}
+  ${' b:::::bbbbbbbbb'}    ${'uuuuuu    uuuuuu'} ${'rrrrr   rrrrrrrrr'}   ${'nnnn  nnnnnnnn'}    ${o('0::::::0   0::::::0')}
+  ${' b::::::::::::::bb'}  ${'u::::u    u::::u'} ${'r::::rrr:::::::::r'}  ${'n:::nn::::::::nn'}  ${o('0:::::0     0:::::0')}
+  ${' b::::::::::::::::b'} ${'u::::u    u::::u'} ${'r:::::::::::::::::r'} ${'n::::::::::::::nn'} ${o('0:::::0     0:::::0')}
+  ${' b:::::bbbbb:::::::b'}${'u::::u    u::::u'} ${'rr::::::rrrrr::::::r'}${'nn:::::::::::::::n'}${o('0:::::0 000 0:::::0')}
+  ${' b:::::b    b::::::b'}${'u::::u    u::::u'}  ${'r:::::r     r:::::r'}  ${'n:::::nnnn:::::n'}${o('0:::::0 000 0:::::0')}
+  ${' b:::::b     b:::::b'}${'u::::u    u::::u'}  ${'r:::::r     rrrrrrr'}  ${'n::::n    n::::n'}${o('0:::::0     0:::::0')}
+  ${' b:::::b     b:::::b'}${'u::::u    u::::u'}  ${'r:::::r'}              ${'n::::n    n::::n'}${o('0:::::0     0:::::0')}
+  ${' b:::::b     b:::::b'}${'u:::::uuuu:::::u'}  ${'r:::::r'}              ${'n::::n    n::::n'}${o('0::::::0   0::::::0')}
+  ${' b:::::bbbbbb::::::b'}${'u:::::::::::::::uu'}${'r:::::r'}              ${'n::::n    n::::n'}${o('0:::::::000:::::::0')}
+  ${' b::::::::::::::::b'}  ${'u:::::::::::::::u'}${'r:::::r'}              ${'n::::n    n::::n'} ${o('00:::::::::::::00')}
+  ${' b:::::::::::::::b'}    ${'uu::::::::uu:::u'}${'r:::::r'}              ${'n::::n    n::::n'}   ${o('00:::::::::00')}
+  ${' bbbbbbbbbbbbbbbb'}       ${'uuuuuuuu  uuuu'}${'rrrrrrr'}              ${'nnnnnn    nnnnnn'}     ${o('000000000')}
 `
   console.log(banner)
   console.log(chalk.dim('  Track every API call. Know your costs.\n'))
