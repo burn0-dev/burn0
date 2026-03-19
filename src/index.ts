@@ -9,6 +9,7 @@ import { BatchBuffer } from './transport/batch'
 import { LocalLedger } from './transport/local'
 import { shipEvents } from './transport/api'
 import { logEvent, formatProcessSummary } from './transport/logger'
+import { fetchPricing } from './transport/local-pricing'
 import type { Burn0Event } from './types'
 
 const BURN0_API_URL = process.env.BURN0_API_URL ?? 'https://api.burn0.dev'
@@ -18,8 +19,13 @@ const mode = detectMode({ isTTY: isTTY(), apiKey })
 
 const { track, startSpan, enrichEvent } = createTracker()
 
-// Store original fetch before patching (for API shipper to avoid recursion)
+// Store original fetch before patching (for API shipper and pricing fetch)
 const originalFetch = globalThis.fetch
+
+// Fetch pricing data from backend (non-blocking, uses original fetch)
+if (mode !== 'test-disabled') {
+  fetchPricing(BURN0_API_URL, originalFetch).catch(() => {})
+}
 
 const accumulatedEvents: Burn0Event[] = []
 

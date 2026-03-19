@@ -40,6 +40,8 @@ function formatCostEstimate(estimate: CostEstimate): string {
       return `${YELLOW}plan?${RESET}`
     case 'unknown':
       return `${GRAY}untracked${RESET}`
+    case 'loading':
+      return `${GRAY}...${RESET}`
   }
 }
 
