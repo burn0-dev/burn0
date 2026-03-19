@@ -9,6 +9,18 @@ import { SERVICE_CATALOG } from '../services/catalog'
 import type { ServiceConfig } from '../types'
 
 export async function runInit(): Promise<void> {
+  try {
+    await _runInit()
+  } catch (err: any) {
+    if (err.name === 'ExitPromptError' || err.message?.includes('SIGINT')) {
+      console.log('\n\n  Cancelled. Run `burn0 init` again when ready.\n')
+      process.exit(0)
+    }
+    throw err
+  }
+}
+
+async function _runInit(): Promise<void> {
   const cwd = process.cwd()
 
   const o = chalk.hex('#FA5D19')
