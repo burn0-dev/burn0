@@ -9,19 +9,27 @@ import type { ServiceConfig } from '../types'
 export async function runInit(): Promise<void> {
   const cwd = process.cwd()
 
-  console.log('')
-  console.log(chalk.cyan('  ****************************************************'))
-  console.log(chalk.cyan('  *                                                  *'))
-  console.log(chalk.cyan('  *') + chalk.bold.white('    ██████  ██    ██ ██████  ███    ██  ██████   ') + chalk.cyan('*'))
-  console.log(chalk.cyan('  *') + chalk.bold.white('    ██   ██ ██    ██ ██   ██ ████   ██ ██  ████  ') + chalk.cyan('*'))
-  console.log(chalk.cyan('  *') + chalk.bold.white('    ██████  ██    ██ ██████  ██ ██  ██ ██ ██ ██  ') + chalk.cyan('*'))
-  console.log(chalk.cyan('  *') + chalk.bold.white('    ██   ██ ██    ██ ██   ██ ██  ██ ██ ████  ██  ') + chalk.cyan('*'))
-  console.log(chalk.cyan('  *') + chalk.bold.white('    ██████   ██████  ██   ██ ██   ████  ██████   ') + chalk.cyan('*'))
-  console.log(chalk.cyan('  *                                                  *'))
-  console.log(chalk.cyan('  *') + chalk.dim('     Track every API call. Know your costs.    ') + chalk.cyan('*'))
-  console.log(chalk.cyan('  *                                                  *'))
-  console.log(chalk.cyan('  ****************************************************'))
-  console.log('')
+  const banner = `
+  ${chalk.cyan('bbbbbbbb')}
+  ${chalk.cyan('b::::::b')}                                                                        ${chalk.cyan('000000000')}
+  ${chalk.cyan('b::::::b')}                                                                      ${chalk.cyan('00:::::::::00')}
+  ${chalk.cyan('b::::::b')}                                                                    ${chalk.cyan('00:::::::::::::00')}
+  ${chalk.cyan(' b:::::b')}                                                                   ${chalk.cyan('0:::::::000:::::::0')}
+  ${chalk.cyan(' b:::::bbbbbbbbb')}    ${chalk.white('uuuuuu    uuuuuu')} ${chalk.white('rrrrr   rrrrrrrrr')}   ${chalk.white('nnnn  nnnnnnnn')}    ${chalk.cyan('0::::::0   0::::::0')}
+  ${chalk.cyan(' b::::::::::::::bb')}  ${chalk.white('u::::u    u::::u')} ${chalk.white('r::::rrr:::::::::r')}  ${chalk.white('n:::nn::::::::nn')}  ${chalk.cyan('0:::::0     0:::::0')}
+  ${chalk.cyan(' b::::::::::::::::b')} ${chalk.white('u::::u    u::::u')} ${chalk.white('r:::::::::::::::::r')} ${chalk.white('n::::::::::::::nn')} ${chalk.cyan('0:::::0     0:::::0')}
+  ${chalk.cyan(' b:::::bbbbb:::::::b')}${chalk.white('u::::u    u::::u')} ${chalk.white('rr::::::rrrrr::::::r')}${chalk.white('nn:::::::::::::::n')}${chalk.cyan('0:::::0 000 0:::::0')}
+  ${chalk.cyan(' b:::::b    b::::::b')}${chalk.white('u::::u    u::::u')}  ${chalk.white('r:::::r     r:::::r')}  ${chalk.white('n:::::nnnn:::::n')}${chalk.cyan('0:::::0 000 0:::::0')}
+  ${chalk.cyan(' b:::::b     b:::::b')}${chalk.white('u::::u    u::::u')}  ${chalk.white('r:::::r     rrrrrrr')}  ${chalk.white('n::::n    n::::n')}${chalk.cyan('0:::::0     0:::::0')}
+  ${chalk.cyan(' b:::::b     b:::::b')}${chalk.white('u::::u    u::::u')}  ${chalk.white('r:::::r')}              ${chalk.white('n::::n    n::::n')}${chalk.cyan('0:::::0     0:::::0')}
+  ${chalk.cyan(' b:::::b     b:::::b')}${chalk.white('u:::::uuuu:::::u')}  ${chalk.white('r:::::r')}              ${chalk.white('n::::n    n::::n')}${chalk.cyan('0::::::0   0::::::0')}
+  ${chalk.cyan(' b:::::bbbbbb::::::b')}${chalk.white('u:::::::::::::::uu')}${chalk.white('r:::::r')}              ${chalk.white('n::::n    n::::n')}${chalk.cyan('0:::::::000:::::::0')}
+  ${chalk.cyan(' b::::::::::::::::b')}  ${chalk.white('u:::::::::::::::u')}${chalk.white('r:::::r')}              ${chalk.white('n::::n    n::::n')} ${chalk.cyan('00:::::::::::::00')}
+  ${chalk.cyan(' b:::::::::::::::b')}    ${chalk.white('uu::::::::uu:::u')}${chalk.white('r:::::r')}              ${chalk.white('n::::n    n::::n')}   ${chalk.cyan('00:::::::::00')}
+  ${chalk.cyan(' bbbbbbbbbbbbbbbb')}       ${chalk.white('uuuuuuuu  uuuu')}${chalk.white('rrrrrrr')}              ${chalk.white('nnnnnn    nnnnnn')}     ${chalk.cyan('000000000')}
+`
+  console.log(banner)
+  console.log(chalk.dim('  Track every API call. Know your costs.\n'))
 
   console.log(chalk.dim('  Scanning your project...\n'))
 
