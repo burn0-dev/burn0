@@ -1,5 +1,5 @@
 {
-  "name": "burn0",
+  "name": "@burn0/burn0",
   "version": "0.1.0",
   "description": "Lightweight cost observability for every API call in your stack",
   "main": "./dist/index.js",
