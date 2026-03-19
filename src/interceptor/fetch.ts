@@ -1,6 +1,7 @@
 import { identifyService } from '../services/map'
 import type { Burn0Event } from '../types'
 import { SCHEMA_VERSION } from '../types'
+import { teeReadableStream, collectStream, extractUsageFromSSE } from './stream'
 
 type EventCallback = (event: Burn0Event) => void
 let originalFetch: typeof globalThis.fetch | null = null
@@ -34,6 +35,46 @@ export function patchFetch(onEvent: EventCallback): void {
 
     let tokensIn: number | undefined
     let tokensOut: number | undefined
+
+    // Check for SSE streaming response
+    if (response.headers.get('content-type')?.includes('text/event-stream') && response.body) {
+      const [forCaller, forBurn0] = teeReadableStream(response.body)
+
+      collectStream(forBurn0).then((raw) => {
+        const usage = extractUsageFromSSE(raw)
+        const sseEvent: Burn0Event = {
+          schema_version: SCHEMA_VERSION,
+          service,
+          endpoint: url.pathname,
+          model,
+          tokens_in: usage?.prompt_tokens ?? usage?.input_tokens,
+          tokens_out: usage?.completion_tokens ?? usage?.output_tokens,
+          status_code: response.status,
+          timestamp: new Date().toISOString(),
+          duration_ms: duration,
+          estimated: !usage,
+        }
+        try { onEvent(sseEvent) } catch {}
+      }).catch(() => {
+        const sseEvent: Burn0Event = {
+          schema_version: SCHEMA_VERSION,
+          service,
+          endpoint: url.pathname,
+          model,
+          status_code: response.status,
+          timestamp: new Date().toISOString(),
+          duration_ms: duration,
+          estimated: true,
+        }
+        try { onEvent(sseEvent) } catch {}
+      })
+
+      return new Response(forCaller, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      })
+    }
 
     if (response.headers.get('content-type')?.includes('application/json')) {
       try {

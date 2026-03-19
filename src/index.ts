@@ -1,5 +1,5 @@
 import { getApiKey, detectMode, isTTY } from './config/env'
-import { canPatch, markPatched, resetGuard } from './interceptor/guard'
+import { canPatch, markPatched, resetGuard, checkImportOrder } from './interceptor/guard'
 import { patchFetch, unpatchFetch } from './interceptor/fetch'
 import { patchHttp, unpatchHttp } from './interceptor/http'
 import { createTracker } from './track'
@@ -45,6 +45,11 @@ const dispatch = createDispatcher(mode, {
   addToBatch: batch ? (e) => batch!.add(e) : undefined,
   accumulate: (e) => accumulatedEvents.push(e),
 })
+
+const preloaded = checkImportOrder()
+if (preloaded.length > 0) {
+  console.warn(`[burn0] Warning: These SDKs were imported before burn0 and may not be tracked: ${preloaded.join(', ')}. Move \`import 'burn0'\` to the top of your entry file.`)
+}
 
 if (canPatch() && mode !== 'test-disabled') {
   const onEvent = (event: Burn0Event) => {

@@ -24,14 +24,15 @@
       "types": "./dist/track.d.ts"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "scripts"],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "postinstall": "node scripts/postinstall.js || true"
   },
   "keywords": ["cost", "observability", "llm", "api", "tracking", "openai", "anthropic"],
   "license": "MIT",
