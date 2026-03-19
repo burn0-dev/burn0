@@ -1,9 +1,10 @@
-import { input, select, confirm } from '@inquirer/prompts'
+import { input, select, confirm, checkbox } from '@inquirer/prompts'
 import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
 import { detectServices } from '../services/detect'
 import { writeConfig } from '../config/store'
+import { SERVICE_CATALOG } from '../services/catalog'
 import type { ServiceConfig } from '../types'
 
 export async function runInit(): Promise<void> {
@@ -68,21 +69,82 @@ export async function runInit(): Promise<void> {
     console.log(chalk.green('  ✓ Added BURN0_API_KEY to .env'))
   }
 
-  const fixedTierServices = services.filter(s => !s.autopriced)
-  const serviceConfigs: { name: string; plan?: string }[] = []
+  // Ask about fixed-tier services detected from package.json
+  const detectedFixedTier = services.filter(s => !s.autopriced)
+  const serviceConfigs: { name: string; plan?: string; monthlyCost?: number }[] = []
 
-  for (const svc of fixedTierServices) {
-    const plan = await select({
-      message: `${svc.name} — how are you billed?`,
+  for (const svc of detectedFixedTier) {
+    const catalogEntry = SERVICE_CATALOG.find(c => c.name === svc.name)
+    if (catalogEntry?.plans) {
+      const plan = await select({
+        message: `${svc.name} — which plan are you on?`,
+        choices: [
+          ...catalogEntry.plans.map(p => ({ name: p.name, value: p.value })),
+          { name: "Skip — I'll set this up later", value: 'skip' },
+        ],
+      })
+      if (plan !== 'skip') {
+        const selected = catalogEntry.plans.find(p => p.value === plan)
+        serviceConfigs.push({ name: svc.name, plan, monthlyCost: selected?.monthly })
+      }
+    }
+  }
+
+  // Ask if they use other services not detected from package.json
+  const detectedNames = new Set(services.map(s => s.name))
+  const additionalServices = SERVICE_CATALOG.filter(s => !detectedNames.has(s.name))
+
+  const addMore = await confirm({
+    message: 'Do you use any other paid APIs or services? (not detected from package.json)',
+    default: false,
+  })
+
+  if (addMore) {
+    // Group by category for cleaner display
+    const llmChoices = additionalServices
+      .filter(s => s.category === 'llm')
+      .map(s => ({ name: `${s.displayName}`, value: s.name }))
+    const apiChoices = additionalServices
+      .filter(s => s.category === 'api')
+      .map(s => ({ name: `${s.displayName}`, value: s.name }))
+    const infraChoices = additionalServices
+      .filter(s => s.category === 'infra')
+      .map(s => ({ name: `${s.displayName}`, value: s.name }))
+
+    const selected = await checkbox({
+      message: 'Select all services you use (space to select, enter to confirm)',
       choices: [
-        { name: 'Free tier', value: 'free' },
-        { name: 'Pay-as-you-go', value: 'payg' },
-        { name: 'Fixed plan (configure in dashboard)', value: 'fixed' },
-        { name: "Skip — I'll set this up later", value: 'skip' },
+        ...(llmChoices.length ? [{ name: chalk.bold.blue('── LLM Providers ──'), value: '__sep_llm', disabled: true as any }] : []),
+        ...llmChoices,
+        ...(apiChoices.length ? [{ name: chalk.bold.magenta('── API Services ──'), value: '__sep_api', disabled: true as any }] : []),
+        ...apiChoices,
+        ...(infraChoices.length ? [{ name: chalk.bold.yellow('── Infrastructure ──'), value: '__sep_infra', disabled: true as any }] : []),
+        ...infraChoices,
       ],
     })
-    if (plan !== 'skip') {
-      serviceConfigs.push({ name: svc.name, plan })
+
+    // For each selected fixed-tier service, ask their plan
+    for (const name of selected) {
+      if (name.startsWith('__sep_')) continue
+      const catalogEntry = SERVICE_CATALOG.find(c => c.name === name)
+      if (!catalogEntry) continue
+
+      if (catalogEntry.pricingType === 'fixed' && catalogEntry.plans) {
+        const plan = await select({
+          message: `${catalogEntry.displayName} — which plan are you on?`,
+          choices: [
+            ...catalogEntry.plans.map(p => ({ name: p.name, value: p.value })),
+            { name: "Skip — I'll set this up later", value: 'skip' },
+          ],
+        })
+        if (plan !== 'skip') {
+          const selectedPlan = catalogEntry.plans.find(p => p.value === plan)
+          serviceConfigs.push({ name, plan, monthlyCost: selectedPlan?.monthly })
+        }
+      } else {
+        // Auto-priced service, just register it
+        serviceConfigs.push({ name })
+      }
     }
   }
 
@@ -102,8 +164,9 @@ export async function runInit(): Promise<void> {
     projectName,
     services: serviceConfigs.map(s => ({
       name: s.name,
-      pricingModel: s.plan === 'fixed' ? 'fixed-tier' as const : 'auto' as const,
+      pricingModel: s.plan ? 'fixed-tier' as const : 'auto' as const,
       plan: s.plan,
+      monthlyCost: s.monthlyCost,
     })),
   })
 
