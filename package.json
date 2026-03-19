@@ -34,8 +34,17 @@
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/postinstall.js || true"
   },
-  "keywords": ["cost", "observability", "llm", "api", "tracking", "openai", "anthropic"],
+  "keywords": ["cost", "observability", "llm", "api", "tracking", "openai", "anthropic", "burn-rate", "cost-tracking", "api-costs"],
+  "author": "burn0",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/burn0-dev/burn0.git"
+  },
+  "homepage": "https://burn0.dev",
+  "bugs": {
+    "url": "https://github.com/burn0-dev/burn0/issues"
+  },
   "devDependencies": {
     "typescript": "^5.7.0",
     "tsup": "^8.0.0",

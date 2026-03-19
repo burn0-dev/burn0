@@ -24,14 +24,26 @@ export function extractUsageFromSSE(raw: string): Usage | null {
   return null
 }
 
-export async function collectStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+export async function collectStream(stream: ReadableStream<Uint8Array>, timeoutMs = 30000): Promise<string> {
   const reader = stream.getReader()
   const chunks: string[] = []
   const decoder = new TextDecoder()
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(decoder.decode(value, { stream: true }))
+
+  const timeout = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('stream timeout')), timeoutMs)
+  })
+
+  try {
+    while (true) {
+      const result = await Promise.race([reader.read(), timeout]) as ReadableStreamReadResult<Uint8Array>
+      if (result.done) break
+      chunks.push(decoder.decode(result.value, { stream: true }))
+    }
+  } catch {
+    // Timeout or error — return what we have
+  } finally {
+    try { reader.releaseLock() } catch {}
   }
+
   return chunks.join('')
 }

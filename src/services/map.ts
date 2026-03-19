@@ -31,6 +31,7 @@ const BUILT_IN_MAP: Record<string, string> = {
   'api.github.com': 'github-api',
   'api.plaid.com': 'plaid',
   'api.pinecone.io': 'pinecone',
+  'supabase.co': 'supabase',
 }
 
 const IGNORED_PATTERNS = ['localhost', '127.0.0.1', '0.0.0.0', '[::1]']
@@ -41,7 +42,16 @@ export function identifyService(hostname: string): string | null {
   if (IGNORED_PATTERNS.includes(hostname) || hostname.startsWith('localhost:')) {
     return null
   }
-  return serviceMap[hostname] ?? `unknown:${hostname}`
+
+  // Exact match
+  if (serviceMap[hostname]) return serviceMap[hostname]
+
+  // Try suffix matching for subdomains (e.g., myproject.supabase.co → supabase.co)
+  for (const [mapHost, service] of Object.entries(serviceMap)) {
+    if (hostname.endsWith('.' + mapHost)) return service
+  }
+
+  return `unknown:${hostname}`
 }
 
 export function mergeServiceMap(remote: Record<string, string>): void {

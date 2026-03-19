@@ -78,10 +78,14 @@ if (mode === 'prod-local') {
 }
 
 if (batch) {
-  const exitFlush = () => { batch!.flush() }
+  const exitFlush = () => {
+    batch!.flush()
+    batch!.destroy()
+  }
   process.on('beforeExit', exitFlush)
   process.on('SIGTERM', exitFlush)
   process.on('SIGINT', exitFlush)
+  process.on('SIGHUP', exitFlush)
 }
 
 const restore = createRestorer({ unpatchFetch, unpatchHttp, resetGuard })

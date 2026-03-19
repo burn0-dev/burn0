@@ -50,13 +50,17 @@ export function patchFetch(onEvent: EventCallback): void {
 
       collectStream(forBurn0).then((raw) => {
         const usage = extractUsageFromSSE(raw)
+        let sseTokensIn = usage?.prompt_tokens ?? usage?.input_tokens
+        let sseTokensOut = usage?.completion_tokens ?? usage?.output_tokens
+        if (sseTokensIn !== undefined && sseTokensIn < 0) sseTokensIn = undefined
+        if (sseTokensOut !== undefined && sseTokensOut < 0) sseTokensOut = undefined
         const sseEvent: Burn0Event = {
           schema_version: SCHEMA_VERSION,
           service,
           endpoint: url.pathname,
           model,
-          tokens_in: usage?.prompt_tokens ?? usage?.input_tokens,
-          tokens_out: usage?.completion_tokens ?? usage?.output_tokens,
+          tokens_in: sseTokensIn,
+          tokens_out: sseTokensOut,
           status_code: response.status,
           timestamp: new Date().toISOString(),
           duration_ms: duration,
@@ -101,6 +105,9 @@ export function patchFetch(onEvent: EventCallback): void {
         if (body.model) model = body.model
       } catch {}
     }
+
+    if (tokensIn !== undefined && tokensIn < 0) tokensIn = undefined
+    if (tokensOut !== undefined && tokensOut < 0) tokensOut = undefined
 
     const event: Burn0Event = {
       schema_version: SCHEMA_VERSION,

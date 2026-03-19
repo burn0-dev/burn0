@@ -42,8 +42,19 @@ function wrapRequest(original: typeof http.request, onEvent: EventCallback): typ
     req.on('response', (res: http.IncomingMessage) => {
       const isJson = res.headers['content-type']?.includes('application/json')
       const chunks: Buffer[] = []
+      const MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
+      let totalSize = 0
+      let tooLarge = false
+
       if (isJson) {
-        res.on('data', (chunk: Buffer) => chunks.push(chunk))
+        res.on('data', (chunk: Buffer) => {
+          totalSize += chunk.length
+          if (totalSize > MAX_RESPONSE_SIZE) {
+            tooLarge = true
+            return
+          }
+          chunks.push(chunk)
+        })
       }
       res.on('end', () => {
         const duration = Date.now() - startTime
@@ -51,7 +62,7 @@ function wrapRequest(original: typeof http.request, onEvent: EventCallback): typ
         let tokensOut: number | undefined
         let model: string | undefined
 
-        if (isJson && chunks.length > 0) {
+        if (isJson && chunks.length > 0 && !tooLarge) {
           try {
             const body = JSON.parse(Buffer.concat(chunks).toString())
             if (body.usage) {
@@ -61,6 +72,9 @@ function wrapRequest(original: typeof http.request, onEvent: EventCallback): typ
             if (body.model) model = body.model
           } catch {}
         }
+
+        if (tokensIn !== undefined && tokensIn < 0) tokensIn = undefined
+        if (tokensOut !== undefined && tokensOut < 0) tokensOut = undefined
 
         const event: Burn0Event = {
           schema_version: SCHEMA_VERSION,

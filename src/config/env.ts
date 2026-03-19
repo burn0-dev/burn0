@@ -19,3 +19,7 @@ export function detectMode(opts: { isTTY: boolean; apiKey: string | undefined })
 export function isTTY(): boolean {
   return Boolean(process.stdout.isTTY)
 }
+
+export function isDebug(): boolean {
+  return process.env.BURN0_DEBUG === '1' || process.env.BURN0_DEBUG === 'true'
+}
