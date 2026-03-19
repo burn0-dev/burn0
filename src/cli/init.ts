@@ -3,6 +3,7 @@ import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
 import { detectServices } from '../services/detect'
+import { scanCodebase } from '../services/scan'
 import { writeConfig } from '../config/store'
 import { SERVICE_CATALOG } from '../services/catalog'
 import type { ServiceConfig } from '../types'
@@ -54,6 +55,33 @@ export async function runInit(): Promise<void> {
     console.log()
   }
 
+  // Phase 2: Scan codebase for API calls and env vars
+  console.log(chalk.dim('  Scanning your codebase for API usage...\n'))
+  const scannedServices = scanCodebase(cwd)
+  const detectedNames = new Set(services.map(s => s.name))
+  const newFromScan = scannedServices.filter(s => !detectedNames.has(s.name))
+
+  if (newFromScan.length > 0) {
+    console.log(chalk.bold(`  Found ${newFromScan.length} more services in your code:\n`))
+    console.log(chalk.dim('  ┌──────────────────────────────────────────────────────────────┐'))
+    for (const svc of newFromScan) {
+      const catalogEntry = SERVICE_CATALOG.find(c => c.name === svc.name)
+      const displayName = catalogEntry?.displayName ?? svc.name
+      const files = svc.foundIn.slice(0, 3).join(', ')
+      const more = svc.foundIn.length > 3 ? ` +${svc.foundIn.length - 3} more` : ''
+      console.log(`  ${chalk.yellow('  ◆')}  ${displayName.padEnd(20)} ${chalk.dim(`found in: ${files}${more}`)}`)
+    }
+    console.log(chalk.dim('  └──────────────────────────────────────────────────────────────┘'))
+    console.log()
+
+    // Add scanned services to detected list for plan questions later
+    for (const svc of newFromScan) {
+      detectedNames.add(svc.name)
+    }
+  } else {
+    console.log(chalk.dim('  No additional services found in codebase.\n'))
+  }
+
   const keyChoice = await select({
     message: 'Do you have a burn0 API key? (get one free at burn0.dev)',
     choices: [
@@ -69,15 +97,27 @@ export async function runInit(): Promise<void> {
     console.log(chalk.green('  ✓ Added BURN0_API_KEY to .env'))
   }
 
-  // Ask about fixed-tier services detected from package.json
-  const detectedFixedTier = services.filter(s => !s.autopriced)
+  // Collect all fixed-tier services from both package.json and code scan
   const serviceConfigs: { name: string; plan?: string; monthlyCost?: number }[] = []
 
-  for (const svc of detectedFixedTier) {
-    const catalogEntry = SERVICE_CATALOG.find(c => c.name === svc.name)
+  // Fixed-tier from package.json detection
+  const detectedFixedTier = services.filter(s => !s.autopriced)
+  // Fixed-tier from code scan
+  const scannedFixedTier = newFromScan.filter(s => {
+    const entry = SERVICE_CATALOG.find(c => c.name === s.name)
+    return entry?.pricingType === 'fixed'
+  })
+
+  const allFixedTier = [
+    ...detectedFixedTier.map(s => s.name),
+    ...scannedFixedTier.map(s => s.name),
+  ]
+
+  for (const name of allFixedTier) {
+    const catalogEntry = SERVICE_CATALOG.find(c => c.name === name)
     if (catalogEntry?.plans) {
       const plan = await select({
-        message: `${svc.name} — which plan are you on?`,
+        message: `${catalogEntry.displayName} — which plan are you on?`,
         choices: [
           ...catalogEntry.plans.map(p => ({ name: p.name, value: p.value })),
           { name: "Skip — I'll set this up later", value: 'skip' },
@@ -85,13 +125,12 @@ export async function runInit(): Promise<void> {
       })
       if (plan !== 'skip') {
         const selected = catalogEntry.plans.find(p => p.value === plan)
-        serviceConfigs.push({ name: svc.name, plan, monthlyCost: selected?.monthly })
+        serviceConfigs.push({ name, plan, monthlyCost: selected?.monthly })
       }
     }
   }
 
-  // Ask if they use other services not detected from package.json
-  const detectedNames = new Set(services.map(s => s.name))
+  // Ask if they use other services not detected from package.json or code scan
   const additionalServices = SERVICE_CATALOG.filter(s => !detectedNames.has(s.name))
 
   const addMore = await confirm({
