@@ -23,7 +23,7 @@ const { track, startSpan, enrichEvent } = createTracker()
 const originalFetch = globalThis.fetch
 
 // Fetch pricing data from backend (non-blocking, uses original fetch)
-if (mode !== 'test-disabled') {
+if (mode !== 'test-disabled' && mode !== 'prod-local') {
   fetchPricing(BURN0_API_URL, originalFetch).catch(() => {})
 }
 
@@ -81,10 +81,14 @@ const dispatch = createDispatcher(mode, {
 
 const preloaded = checkImportOrder()
 if (preloaded.length > 0) {
-  console.warn(`[burn0] Warning: These SDKs were imported before burn0 and may not be tracked: ${preloaded.join(', ')}. Move \`import 'burn0'\` to the top of your entry file.`)
+  console.warn(`[burn0] Warning: These SDKs were imported before burn0 and may not be tracked: ${preloaded.join(', ')}. Move \`import '@burn0/burn0'\` to the top of your entry file.`)
 }
 
-if (canPatch() && mode !== 'test-disabled') {
+if (mode === 'prod-local') {
+  console.warn('[burn0] No API key — costs not tracked. Get one free at burn0.dev/api')
+}
+
+if (canPatch() && mode !== 'test-disabled' && mode !== 'prod-local') {
   const onEvent = (event: Burn0Event) => {
     const enriched = enrichEvent(event)
     dispatch(enriched)
