@@ -19,58 +19,50 @@ describe('createDispatcher', () => {
     const logEvent = vi.fn()
     const writeLedger = vi.fn()
     const addToBatch = vi.fn()
-    const accumulate = vi.fn()
 
-    const dispatch = createDispatcher('dev-local', { logEvent, writeLedger, addToBatch, accumulate })
+    const dispatch = createDispatcher('dev-local', { logEvent, writeLedger, addToBatch })
     dispatch(makeEvent())
 
     expect(logEvent).toHaveBeenCalledOnce()
     expect(writeLedger).toHaveBeenCalledOnce()
     expect(addToBatch).not.toHaveBeenCalled()
-    expect(accumulate).not.toHaveBeenCalled()
   })
 
   it('dev-cloud: calls logEvent and addToBatch', () => {
     const logEvent = vi.fn()
     const writeLedger = vi.fn()
     const addToBatch = vi.fn()
-    const accumulate = vi.fn()
 
-    const dispatch = createDispatcher('dev-cloud', { logEvent, writeLedger, addToBatch, accumulate })
+    const dispatch = createDispatcher('dev-cloud', { logEvent, writeLedger, addToBatch })
     dispatch(makeEvent())
 
     expect(logEvent).toHaveBeenCalledOnce()
     expect(addToBatch).toHaveBeenCalledOnce()
     expect(writeLedger).not.toHaveBeenCalled()
-    expect(accumulate).not.toHaveBeenCalled()
   })
 
-  it('prod-cloud: only calls addToBatch (silent)', () => {
+  it('prod-cloud: calls logEvent and addToBatch', () => {
     const logEvent = vi.fn()
     const writeLedger = vi.fn()
     const addToBatch = vi.fn()
-    const accumulate = vi.fn()
 
-    const dispatch = createDispatcher('prod-cloud', { logEvent, writeLedger, addToBatch, accumulate })
+    const dispatch = createDispatcher('prod-cloud', { logEvent, writeLedger, addToBatch })
     dispatch(makeEvent())
 
+    expect(logEvent).toHaveBeenCalledOnce()
     expect(addToBatch).toHaveBeenCalledOnce()
-    expect(logEvent).not.toHaveBeenCalled()
     expect(writeLedger).not.toHaveBeenCalled()
-    expect(accumulate).not.toHaveBeenCalled()
   })
 
-  it('prod-local: calls accumulate only', () => {
+  it('prod-local: calls logEvent only', () => {
     const logEvent = vi.fn()
     const writeLedger = vi.fn()
     const addToBatch = vi.fn()
-    const accumulate = vi.fn()
 
-    const dispatch = createDispatcher('prod-local', { logEvent, writeLedger, addToBatch, accumulate })
+    const dispatch = createDispatcher('prod-local', { logEvent, writeLedger, addToBatch })
     dispatch(makeEvent())
 
-    expect(accumulate).toHaveBeenCalledOnce()
-    expect(logEvent).not.toHaveBeenCalled()
+    expect(logEvent).toHaveBeenCalledOnce()
     expect(writeLedger).not.toHaveBeenCalled()
     expect(addToBatch).not.toHaveBeenCalled()
   })
@@ -79,30 +71,26 @@ describe('createDispatcher', () => {
     const logEvent = vi.fn()
     const writeLedger = vi.fn()
     const addToBatch = vi.fn()
-    const accumulate = vi.fn()
 
-    const dispatch = createDispatcher('test-enabled', { logEvent, writeLedger, addToBatch, accumulate })
+    const dispatch = createDispatcher('test-enabled', { logEvent, writeLedger, addToBatch })
     dispatch(makeEvent())
 
     expect(logEvent).toHaveBeenCalledOnce()
     expect(writeLedger).toHaveBeenCalledOnce()
     expect(addToBatch).toHaveBeenCalledOnce()
-    expect(accumulate).not.toHaveBeenCalled()
   })
 
   it('test-disabled: is a no-op (calls nothing)', () => {
     const logEvent = vi.fn()
     const writeLedger = vi.fn()
     const addToBatch = vi.fn()
-    const accumulate = vi.fn()
 
-    const dispatch = createDispatcher('test-disabled', { logEvent, writeLedger, addToBatch, accumulate })
+    const dispatch = createDispatcher('test-disabled', { logEvent, writeLedger, addToBatch })
     dispatch(makeEvent())
 
     expect(logEvent).not.toHaveBeenCalled()
     expect(writeLedger).not.toHaveBeenCalled()
     expect(addToBatch).not.toHaveBeenCalled()
-    expect(accumulate).not.toHaveBeenCalled()
   })
 
   it('passes the event to all called deps', () => {
