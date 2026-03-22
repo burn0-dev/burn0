@@ -1,149 +1,146 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { formatEventLine, formatProcessSummary, logEvent } from '../../src/transport/logger'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { createTicker } from '../../src/transport/logger'
 import type { Burn0Event } from '../../src/types'
+
+vi.mock('../../src/transport/local-pricing', () => ({
+  estimateLocalCost: vi.fn((event: any) => {
+    if (event.service === 'free-svc') return { type: 'free' as const }
+    if (event.service === 'unknown-svc') return { type: 'unknown' as const }
+    if (event.tokens_in !== undefined && event.tokens_out !== undefined) {
+      return { type: 'priced' as const, cost: 0.01 }
+    }
+    return { type: 'no-tokens' as const }
+  }),
+}))
 
 function makeEvent(overrides: Partial<Burn0Event> = {}): Burn0Event {
   return {
     schema_version: 1,
     service: 'openai',
     endpoint: '/v1/chat/completions',
+    model: 'gpt-4o',
+    tokens_in: 500,
+    tokens_out: 250,
     status_code: 200,
-    timestamp: '2024-01-15T14:30:00.000Z',
+    timestamp: new Date().toISOString(),
     duration_ms: 342,
     estimated: false,
     ...overrides,
   }
 }
 
-describe('formatEventLine', () => {
-  it('formats a basic event with service and endpoint', () => {
-    const event = makeEvent()
-    const line = formatEventLine(event)
-    expect(line).toContain('openai')
-    expect(line).toContain('/v1/chat/completions')
+describe('createTicker', () => {
+  let stderrSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
   })
 
-  it('uses model instead of endpoint when model is present', () => {
-    const event = makeEvent({ model: 'gpt-4o' })
-    const line = formatEventLine(event)
-    expect(line).toContain('gpt-4o')
-    expect(line).not.toContain('/v1/chat/completions')
-  })
-
-  it('includes token counts when tokens_in and tokens_out are present', () => {
-    const event = makeEvent({ model: 'gpt-4o', tokens_in: 500, tokens_out: 250 })
-    const line = formatEventLine(event)
-    expect(line).toContain('500')
-    expect(line).toContain('250')
-  })
-
-  it('formats large token counts with K suffix', () => {
-    const event = makeEvent({ model: 'gpt-4o', tokens_in: 1500, tokens_out: 2000 })
-    const line = formatEventLine(event)
-    expect(line).toContain('1.5K')
-    expect(line).toContain('2.0K')
-  })
-
-  it('does not include token info when only tokens_in is present', () => {
-    const event = makeEvent({ tokens_in: 100 })
-    const line = formatEventLine(event)
-    expect(line).not.toContain('in ·')
-  })
-
-  it('includes service name in output', () => {
-    const event = makeEvent({ timestamp: '2024-01-15T14:30:00.000Z' })
-    const line = formatEventLine(event)
-    expect(line).toContain('openai')
-  })
-})
-
-describe('formatProcessSummary', () => {
-  it('produces valid JSON', () => {
-    const events = [makeEvent(), makeEvent({ service: 'anthropic' })]
-    const summary = formatProcessSummary(events, 3600)
-    expect(() => JSON.parse(summary)).not.toThrow()
-  })
-
-  it('includes burn0 key set to process-summary', () => {
-    const summary = formatProcessSummary([], 0)
-    const parsed = JSON.parse(summary)
-    expect(parsed.burn0).toBe('process-summary')
-  })
-
-  it('calculates uptime_hours correctly', () => {
-    const summary = formatProcessSummary([], 7200)
-    const parsed = JSON.parse(summary)
-    expect(parsed.uptime_hours).toBe(2)
-  })
-
-  it('counts total_calls correctly', () => {
-    const events = [makeEvent(), makeEvent(), makeEvent()]
-    const summary = formatProcessSummary(events, 0)
-    const parsed = JSON.parse(summary)
-    expect(parsed.total_calls).toBe(3)
-  })
-
-  it('groups calls by service', () => {
-    const events = [
-      makeEvent({ service: 'openai' }),
-      makeEvent({ service: 'openai' }),
-      makeEvent({ service: 'anthropic' }),
-    ]
-    const summary = formatProcessSummary(events, 0)
-    const parsed = JSON.parse(summary)
-    expect(parsed.services.openai.calls).toBe(2)
-    expect(parsed.services.anthropic.calls).toBe(1)
-  })
-
-  it('sums tokens per service', () => {
-    const events = [
-      makeEvent({ service: 'openai', tokens_in: 100, tokens_out: 50 }),
-      makeEvent({ service: 'openai', tokens_in: 200, tokens_out: 75 }),
-    ]
-    const summary = formatProcessSummary(events, 0)
-    const parsed = JSON.parse(summary)
-    expect(parsed.services.openai.tokens_in).toBe(300)
-    expect(parsed.services.openai.tokens_out).toBe(125)
-  })
-
-  it('omits tokens_in/tokens_out from service when no token data', () => {
-    const events = [makeEvent()]
-    const summary = formatProcessSummary(events, 0)
-    const parsed = JSON.parse(summary)
-    expect(parsed.services.openai.tokens_in).toBeUndefined()
-    expect(parsed.services.openai.tokens_out).toBeUndefined()
-  })
-
-  it('includes message field', () => {
-    const summary = formatProcessSummary([], 0)
-    const parsed = JSON.parse(summary)
-    expect(typeof parsed.message).toBe('string')
-    expect(parsed.message.length).toBeGreaterThan(0)
-  })
-
-  it('handles empty events array', () => {
-    const summary = formatProcessSummary([], 1800)
-    const parsed = JSON.parse(summary)
-    expect(parsed.total_calls).toBe(0)
-    expect(parsed.services).toEqual({})
-    expect(parsed.uptime_hours).toBe(0.5)
-  })
-})
-
-describe('logEvent', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('writes to process.stdout', () => {
-    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
-    const event = makeEvent({ model: 'gpt-4o' })
-    logEvent(event)
-    // First call prints header (3 lines) + event line = 4 calls
-    expect(writeSpy).toHaveBeenCalled()
-    const allOutput = writeSpy.mock.calls.map(c => c[0] as string).join('')
-    expect(allOutput).toContain('gpt-4o')
-    expect(allOutput).toContain('openai')
-    expect(allOutput).toContain('burn0')
+  it('creates a ticker with tick and printExitSummary methods', () => {
+    const ticker = createTicker({ todayCost: 0, todayCalls: 0, perServiceCosts: {} })
+    expect(typeof ticker.tick).toBe('function')
+    expect(typeof ticker.printExitSummary).toBe('function')
+  })
+
+  it('tick writes to stderr when isTTY is true', () => {
+    const origIsTTY = process.stderr.isTTY
+    Object.defineProperty(process.stderr, 'isTTY', { value: true, writable: true })
+    const ticker = createTicker({ todayCost: 0, todayCalls: 0, perServiceCosts: {} })
+    ticker.tick(makeEvent())
+    expect(stderrSpy).toHaveBeenCalled()
+    const output = stderrSpy.mock.calls.map(c => c[0] as string).join('')
+    expect(output).toContain('burn0')
+    expect(output).toContain('$')
+    Object.defineProperty(process.stderr, 'isTTY', { value: origIsTTY, writable: true })
+  })
+
+  it('tick does NOT write to stderr when isTTY is false', () => {
+    const origIsTTY = process.stderr.isTTY
+    Object.defineProperty(process.stderr, 'isTTY', { value: false, writable: true })
+    const ticker = createTicker({ todayCost: 0, todayCalls: 0, perServiceCosts: {} })
+    ticker.tick(makeEvent())
+    expect(stderrSpy).not.toHaveBeenCalled()
+    Object.defineProperty(process.stderr, 'isTTY', { value: origIsTTY, writable: true })
+  })
+
+  it('accumulates session cost across ticks', () => {
+    const origIsTTY = process.stderr.isTTY
+    Object.defineProperty(process.stderr, 'isTTY', { value: true, writable: true })
+    const ticker = createTicker({ todayCost: 0, todayCalls: 0, perServiceCosts: {} })
+    ticker.tick(makeEvent())
+    ticker.tick(makeEvent())
+    ticker.tick(makeEvent())
+    const lastCall = stderrSpy.mock.calls[stderrSpy.mock.calls.length - 1][0] as string
+    expect(lastCall).toContain('3 calls')
+    Object.defineProperty(process.stderr, 'isTTY', { value: origIsTTY, writable: true })
+  })
+
+  it('seeds today cost from init', () => {
+    const origIsTTY = process.stderr.isTTY
+    Object.defineProperty(process.stderr, 'isTTY', { value: true, writable: true })
+    const ticker = createTicker({ todayCost: 5.0, todayCalls: 20, perServiceCosts: { openai: 5.0 } })
+    ticker.tick(makeEvent())
+    const lastCall = stderrSpy.mock.calls[stderrSpy.mock.calls.length - 1][0] as string
+    expect(lastCall).toContain('21 calls')
+    Object.defineProperty(process.stderr, 'isTTY', { value: origIsTTY, writable: true })
+  })
+
+  it('does not count free/unknown services in cost breakdown', () => {
+    const origIsTTY = process.stderr.isTTY
+    Object.defineProperty(process.stderr, 'isTTY', { value: true, writable: true })
+    const ticker = createTicker({ todayCost: 0, todayCalls: 0, perServiceCosts: {} })
+    ticker.tick(makeEvent({ service: 'free-svc' }))
+    const lastCall = stderrSpy.mock.calls[stderrSpy.mock.calls.length - 1][0] as string
+    expect(lastCall).not.toContain('free-svc')
+    Object.defineProperty(process.stderr, 'isTTY', { value: origIsTTY, writable: true })
+  })
+
+  it('printExitSummary writes session and today totals', () => {
+    const origIsTTY = process.stderr.isTTY
+    Object.defineProperty(process.stderr, 'isTTY', { value: true, writable: true })
+    const ticker = createTicker({ todayCost: 10.0, todayCalls: 50, perServiceCosts: {} })
+    ticker.tick(makeEvent())
+    stderrSpy.mockClear()
+    ticker.printExitSummary()
+    const output = stderrSpy.mock.calls.map(c => c[0] as string).join('')
+    expect(output).toContain('session')
+    expect(output).toContain('today')
+    Object.defineProperty(process.stderr, 'isTTY', { value: origIsTTY, writable: true })
+  })
+
+  it('printExitSummary is idempotent (only prints once)', () => {
+    const origIsTTY = process.stderr.isTTY
+    Object.defineProperty(process.stderr, 'isTTY', { value: true, writable: true })
+    const ticker = createTicker({ todayCost: 0, todayCalls: 0, perServiceCosts: {} })
+    ticker.tick(makeEvent())
+    stderrSpy.mockClear()
+    ticker.printExitSummary()
+    const firstCallCount = stderrSpy.mock.calls.length
+    ticker.printExitSummary()
+    expect(stderrSpy.mock.calls.length).toBe(firstCallCount)
+    Object.defineProperty(process.stderr, 'isTTY', { value: origIsTTY, writable: true })
+  })
+
+  it('printExitSummary does not print if no calls were made', () => {
+    const origIsTTY = process.stderr.isTTY
+    Object.defineProperty(process.stderr, 'isTTY', { value: true, writable: true })
+    const ticker = createTicker({ todayCost: 0, todayCalls: 0, perServiceCosts: {} })
+    ticker.printExitSummary()
+    expect(stderrSpy).not.toHaveBeenCalled()
+    Object.defineProperty(process.stderr, 'isTTY', { value: origIsTTY, writable: true })
+  })
+
+  it('printExitSummary does not write when stderr is not TTY', () => {
+    const origIsTTY = process.stderr.isTTY
+    Object.defineProperty(process.stderr, 'isTTY', { value: false, writable: true })
+    const ticker = createTicker({ todayCost: 0, todayCalls: 0, perServiceCosts: {} })
+    ticker.tick(makeEvent())
+    ticker.printExitSummary()
+    expect(stderrSpy).not.toHaveBeenCalled()
+    Object.defineProperty(process.stderr, 'isTTY', { value: origIsTTY, writable: true })
   })
 })
