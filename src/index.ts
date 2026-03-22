@@ -8,8 +8,8 @@ import { createDispatcher } from './transport/dispatcher'
 import { BatchBuffer } from './transport/batch'
 import { LocalLedger } from './transport/local'
 import { shipEvents } from './transport/api'
-import { logEvent, formatProcessSummary } from './transport/logger'
-import { fetchPricing } from './transport/local-pricing'
+import { createTicker } from './transport/logger'
+import { fetchPricing, estimateLocalCost } from './transport/local-pricing'
 import type { Burn0Event } from './types'
 
 const BURN0_API_URL = process.env.BURN0_API_URL ?? 'https://api.burn0.dev'
@@ -27,11 +27,37 @@ if (mode !== 'test-disabled') {
   fetchPricing(BURN0_API_URL, originalFetch).catch(() => {})
 }
 
-const accumulatedEvents: Burn0Event[] = []
+// Always create ledger — used to seed today's cost for the ticker
+const ledger = new LocalLedger(process.cwd())
 
-const ledger = (mode === 'dev-local' || mode === 'test-enabled')
-  ? new LocalLedger(process.cwd())
-  : null
+// Seed ticker with today's prior costs from ledger
+function getTodayDateStr(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+let todayCost = 0
+let todayCalls = 0
+const perServiceCosts: Record<string, number> = {}
+
+try {
+  const todayStr = getTodayDateStr()
+  const allEvents = ledger.read()
+  for (const event of allEvents) {
+    const eventDate = new Date(event.timestamp)
+    const eventDateStr = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}-${String(eventDate.getDate()).padStart(2, '0')}`
+    if (eventDateStr === todayStr) {
+      todayCalls++
+      const estimate = estimateLocalCost(event)
+      if (estimate.type === 'priced' && estimate.cost > 0) {
+        todayCost += estimate.cost
+        perServiceCosts[event.service] = (perServiceCosts[event.service] ?? 0) + estimate.cost
+      }
+    }
+  }
+} catch {}
+
+const ticker = createTicker({ todayCost, todayCalls, perServiceCosts })
 
 let batch: BatchBuffer | null = null
 if ((mode === 'dev-cloud' || mode === 'prod-cloud') && apiKey) {
@@ -45,11 +71,12 @@ if ((mode === 'dev-cloud' || mode === 'prod-cloud') && apiKey) {
   })
 }
 
+const shouldWriteLedger = mode === 'dev-local' || mode === 'test-enabled'
+
 const dispatch = createDispatcher(mode, {
-  logEvent,
-  writeLedger: ledger ? (e) => ledger.write(e) : undefined,
+  logEvent: (e) => ticker.tick(e),
+  writeLedger: shouldWriteLedger ? (e) => ledger.write(e) : undefined,
   addToBatch: batch ? (e) => batch!.add(e) : undefined,
-  accumulate: (e) => accumulatedEvents.push(e),
 })
 
 const preloaded = checkImportOrder()
@@ -67,16 +94,7 @@ if (canPatch() && mode !== 'test-disabled') {
   markPatched()
 }
 
-if (mode === 'prod-local') {
-  const startTime = Date.now()
-  process.on('beforeExit', () => {
-    if (accumulatedEvents.length > 0) {
-      const uptimeSeconds = (Date.now() - startTime) / 1000
-      console.log(formatProcessSummary(accumulatedEvents, uptimeSeconds))
-    }
-  })
-}
-
+// Batch flush on exit (must be registered before ticker signal handlers)
 if (batch) {
   const exitFlush = () => {
     batch!.flush()
@@ -87,6 +105,21 @@ if (batch) {
   process.on('SIGINT', exitFlush)
   process.on('SIGHUP', exitFlush)
 }
+
+// Exit handlers — print ticker summary then re-emit signal
+// Registered after batch flush so flush runs first (Node fires listeners in order)
+const exitSignals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP']
+for (const signal of exitSignals) {
+  const handler = () => {
+    ticker.printExitSummary()
+    process.removeListener(signal, handler)
+    process.kill(process.pid, signal)
+  }
+  process.on(signal, handler)
+}
+process.on('beforeExit', () => {
+  ticker.printExitSummary()
+})
 
 const restore = createRestorer({ unpatchFetch, unpatchHttp, resetGuard })
 
