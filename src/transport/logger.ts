@@ -77,15 +77,37 @@ export function createTicker(init: TickerInit): Ticker {
 
   let exitPrinted = false
 
+  let pricedCalls = 0
+  let lastLineLen = 0
+
   function render(): void {
     if (!process.stderr.isTTY) return
     if (todayCalls === 0) return
 
-    const breakdown = formatServiceBreakdown(perServiceCosts, 40)
-    const breakdownPart = breakdown ? ` ${GRAY}──${RESET} ${breakdown}` : ''
-    const line = `${CLEAR_LINE}  ${ORANGE}${BOLD}burn0 ▸${RESET} ${GREEN}${formatCost(todayCost)}${RESET} ${GRAY}today (${todayCalls} calls)${RESET}${breakdownPart}`
+    let content: string
+    if (pricedCalls === 0 && todayCost === 0) {
+      content = `  burn0 ▸ ${todayCalls} calls today`
+    } else {
+      const breakdown = formatServiceBreakdown(perServiceCosts, 40)
+      const breakdownPart = breakdown ? ` ── ${breakdown}` : ''
+      content = `  burn0 ▸ ${formatCost(todayCost)} today (${todayCalls} calls)${breakdownPart}`
+    }
 
-    process.stderr.write(line)
+    // Pad with spaces to clear any leftover characters from the previous render
+    const pad = lastLineLen > content.length ? ' '.repeat(lastLineLen - content.length) : ''
+    lastLineLen = content.length
+
+    // Apply colors after measuring length (ANSI codes don't take terminal width)
+    let colored: string
+    if (pricedCalls === 0 && todayCost === 0) {
+      colored = `  ${ORANGE}${BOLD}burn0 ▸${RESET} ${GRAY}${todayCalls} calls today${RESET}`
+    } else {
+      const breakdown = formatServiceBreakdown(perServiceCosts, 40)
+      const breakdownPart = breakdown ? ` ${GRAY}──${RESET} ${breakdown}` : ''
+      colored = `  ${ORANGE}${BOLD}burn0 ▸${RESET} ${GREEN}${formatCost(todayCost)}${RESET} ${GRAY}today (${todayCalls} calls)${RESET}${breakdownPart}`
+    }
+
+    process.stderr.write(`\r${colored}${pad}`)
   }
 
   function tick(event: Burn0Event): void {
@@ -97,6 +119,7 @@ export function createTicker(init: TickerInit): Ticker {
     if (estimate.type === 'priced' && estimate.cost > 0) {
       todayCost += estimate.cost
       sessionCost += estimate.cost
+      pricedCalls++
       perServiceCosts[event.service] = (perServiceCosts[event.service] ?? 0) + estimate.cost
     }
 
@@ -110,7 +133,12 @@ export function createTicker(init: TickerInit): Ticker {
     exitPrinted = true
 
     const duration = formatDuration(Date.now() - sessionStartTime)
-    const line = `\n  ${ORANGE}${BOLD}burn0 ▸${RESET} ${GRAY}session:${RESET} ${GREEN}${formatCost(sessionCost)}${RESET} ${GRAY}(${sessionCalls} calls, ${duration})${RESET} ${GRAY}──${RESET} ${GRAY}today:${RESET} ${GREEN}${formatCost(todayCost)}${RESET}\n`
+    let line: string
+    if (pricedCalls === 0 && sessionCost === 0) {
+      line = `\n  ${ORANGE}${BOLD}burn0 ▸${RESET} ${GRAY}session: ${sessionCalls} calls (${duration})${RESET} ${GRAY}──${RESET} ${GRAY}today: ${todayCalls} calls${RESET}\n`
+    } else {
+      line = `\n  ${ORANGE}${BOLD}burn0 ▸${RESET} ${GRAY}session:${RESET} ${GREEN}${formatCost(sessionCost)}${RESET} ${GRAY}(${sessionCalls} calls, ${duration})${RESET} ${GRAY}──${RESET} ${GRAY}today:${RESET} ${GREEN}${formatCost(todayCost)}${RESET}\n`
+    }
 
     process.stderr.write(line)
   }

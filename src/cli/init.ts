@@ -37,7 +37,8 @@ async function _runInit(): Promise<void> {
   const newFromScan = scannedServices.filter(s => !detectedNames.has(s.name))
 
   // Build unified list of detected services
-  const allDetected: { name: string; displayName: string; autopriced: boolean }[] = []
+  interface DetectedSvc { name: string; displayName: string; autopriced: boolean }
+  const allDetected: DetectedSvc[] = []
 
   for (const svc of pkgServices) {
     const entry = SERVICE_CATALOG.find(c => c.name === svc.name)
@@ -56,69 +57,72 @@ async function _runInit(): Promise<void> {
     })
   }
 
-  let selectedServices: string[] = []
+  const serviceConfigs: { name: string; plan?: string; monthlyCost?: number }[] = []
 
   if (allDetected.length > 0) {
-    const ADD_MORE = '__add_more__'
+    // Show detected services (non-interactive display)
+    console.log(chalk.bold(`  Auto-detected ${allDetected.length} services:\n`))
+    for (const svc of allDetected) {
+      const tag = svc.autopriced
+        ? chalk.dim('auto-priced')
+        : chalk.yellow('needs plan')
+      console.log(`  ${chalk.green('  ✓')}  ${svc.displayName.padEnd(20)} ${tag}`)
+    }
+    console.log()
 
-    const choices = allDetected.map(svc => ({
-      name: `${svc.displayName.padEnd(20)} ${svc.autopriced ? chalk.dim('auto-priced') : chalk.yellow('select plan ▸')}`,
-      value: svc.name,
-      checked: true,
-    }))
-    choices.push({ name: chalk.cyan('+ Add more services...'), value: ADD_MORE, checked: false })
-
-    selectedServices = await checkbox({
-      message: 'Detected services (uncheck to exclude):',
-      choices,
-    })
-
-    // Handle "Add more" selection
-    if (selectedServices.includes(ADD_MORE)) {
-      selectedServices = selectedServices.filter(s => s !== ADD_MORE)
-      const additionalServices = SERVICE_CATALOG.filter(s =>
-        !allDetected.some(d => d.name === s.name)
-      )
-
-      if (additionalServices.length > 0) {
-        const llmChoices = additionalServices
-          .filter(s => s.category === 'llm')
-          .map(s => ({ name: s.displayName, value: s.name }))
-        const apiChoices = additionalServices
-          .filter(s => s.category === 'api')
-          .map(s => ({ name: s.displayName, value: s.name }))
-        const infraChoices = additionalServices
-          .filter(s => s.category === 'infra')
-          .map(s => ({ name: s.displayName, value: s.name }))
-
-        const additional = await checkbox({
-          message: 'Select additional services:',
-          choices: [
-            ...(llmChoices.length ? [{ name: chalk.bold.blue('── LLM Providers ──'), value: '__sep', disabled: true as any }] : []),
-            ...llmChoices,
-            ...(apiChoices.length ? [{ name: chalk.bold.magenta('── API Services ──'), value: '__sep2', disabled: true as any }] : []),
-            ...apiChoices,
-            ...(infraChoices.length ? [{ name: chalk.bold.yellow('── Infrastructure ──'), value: '__sep3', disabled: true as any }] : []),
-            ...infraChoices,
-          ],
-        })
-        selectedServices.push(...additional.filter(s => !s.startsWith('__sep')))
+    // Prompt for fixed-tier service plans
+    const fixedTier = allDetected.filter(s => !s.autopriced)
+    if (fixedTier.length > 0) {
+      for (const svc of fixedTier) {
+        const entry = SERVICE_CATALOG.find(c => c.name === svc.name)
+        if (entry?.plans) {
+          const plan = await select({
+            message: `${entry.displayName} — which plan?`,
+            choices: [
+              ...entry.plans.map(p => ({ name: p.name, value: p.value })),
+              { name: 'Skip', value: 'skip' },
+            ],
+          })
+          if (plan !== 'skip') {
+            const selected = entry.plans.find(p => p.value === plan)
+            serviceConfigs.push({ name: svc.name, plan, monthlyCost: selected?.monthly })
+          } else {
+            serviceConfigs.push({ name: svc.name })
+          }
+        }
       }
+    }
+
+    // Add all auto-priced detected services to config
+    for (const svc of allDetected.filter(s => s.autopriced)) {
+      serviceConfigs.push({ name: svc.name })
     }
   } else {
     console.log(chalk.dim('  No services detected.\n'))
-    const llmChoices = SERVICE_CATALOG
+  }
+
+  // Ask if they want to add more services
+  const addMore = await confirm({
+    message: 'Add other services you use?',
+    default: false,
+  })
+
+  if (addMore) {
+    const alreadyAdded = new Set(serviceConfigs.map(s => s.name))
+    const additionalServices = SERVICE_CATALOG.filter(s => !alreadyAdded.has(s.name))
+
+    const llmChoices = additionalServices
       .filter(s => s.category === 'llm')
       .map(s => ({ name: s.displayName, value: s.name }))
-    const apiChoices = SERVICE_CATALOG
+    const apiChoices = additionalServices
       .filter(s => s.category === 'api')
       .map(s => ({ name: s.displayName, value: s.name }))
-    const infraChoices = SERVICE_CATALOG
+    const infraChoices = additionalServices
       .filter(s => s.category === 'infra')
       .map(s => ({ name: s.displayName, value: s.name }))
 
-    selectedServices = await checkbox({
-      message: 'Select the services you use:',
+    const additional = await checkbox({
+      message: 'Select services:',
       choices: [
         ...(llmChoices.length ? [{ name: chalk.bold.blue('── LLM Providers ──'), value: '__sep', disabled: true as any }] : []),
         ...llmChoices,
@@ -128,30 +132,27 @@ async function _runInit(): Promise<void> {
         ...infraChoices,
       ],
     })
-    selectedServices = selectedServices.filter(s => !s.startsWith('__sep'))
-  }
 
-  // Prompt for fixed-tier service plans
-  const serviceConfigs: { name: string; plan?: string; monthlyCost?: number }[] = []
-
-  for (const name of selectedServices) {
-    const entry = SERVICE_CATALOG.find(c => c.name === name)
-    if (entry?.pricingType === 'fixed' && entry.plans) {
-      const plan = await select({
-        message: `${entry.displayName} — which plan?`,
-        choices: [
-          ...entry.plans.map(p => ({ name: p.name, value: p.value })),
-          { name: 'Skip', value: 'skip' },
-        ],
-      })
-      if (plan !== 'skip') {
-        const selected = entry.plans.find(p => p.value === plan)
-        serviceConfigs.push({ name, plan, monthlyCost: selected?.monthly })
+    for (const name of additional) {
+      if (name.startsWith('__sep')) continue
+      const entry = SERVICE_CATALOG.find(c => c.name === name)
+      if (entry?.pricingType === 'fixed' && entry.plans) {
+        const plan = await select({
+          message: `${entry.displayName} — which plan?`,
+          choices: [
+            ...entry.plans.map(p => ({ name: p.name, value: p.value })),
+            { name: 'Skip', value: 'skip' },
+          ],
+        })
+        if (plan !== 'skip') {
+          const selected = entry.plans.find(p => p.value === plan)
+          serviceConfigs.push({ name, plan, monthlyCost: selected?.monthly })
+        } else {
+          serviceConfigs.push({ name })
+        }
       } else {
         serviceConfigs.push({ name })
       }
-    } else {
-      serviceConfigs.push({ name })
     }
   }
 
@@ -176,13 +177,13 @@ async function _runInit(): Promise<void> {
   // Ensure .burn0/ in gitignore
   ensureGitignore(cwd, '.burn0/')
 
-  // Check .env in gitignore
+  // Ensure .env is in gitignore (protect secrets)
   const gitignorePath = path.join(cwd, '.gitignore')
   let gitignoreContent = ''
   try { gitignoreContent = fs.readFileSync(gitignorePath, 'utf-8') } catch {}
   if (!gitignoreContent.includes('.env')) {
-    const addEnv = await confirm({ message: '.env is not in .gitignore. Add it?' })
-    if (addEnv) ensureGitignore(cwd, '.env')
+    ensureGitignore(cwd, '.env')
+    console.log(chalk.green('  ✓ Added .env to .gitignore (protects your API keys)'))
   }
 
   // Step 3: Done
