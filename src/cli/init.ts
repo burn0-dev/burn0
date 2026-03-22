@@ -174,6 +174,31 @@ async function _runInit(): Promise<void> {
     })),
   })
 
+  // Sync config to server if API key was provided
+  if (apiKey) {
+    try {
+      const apiUrl = process.env.BURN0_API_URL ?? 'https://api.burn0.dev'
+      const res = await fetch(`${apiUrl}/v1/projects/config`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          services: serviceConfigs.map(s => ({
+            name: s.name,
+            pricingModel: s.plan ? 'fixed-tier' : 'auto',
+            plan: s.plan,
+            monthlyCost: s.monthlyCost,
+          })),
+        }),
+      })
+      if (res.ok) {
+        console.log(chalk.green('  ✓ Config synced to burn0.dev'))
+      }
+    } catch {}
+  }
+
   // Ensure .burn0/ in gitignore
   ensureGitignore(cwd, '.burn0/')
 
