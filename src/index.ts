@@ -71,7 +71,8 @@ if ((mode === 'dev-cloud' || mode === 'prod-cloud') && apiKey) {
   })
 }
 
-const shouldWriteLedger = mode === 'dev-local' || mode === 'test-enabled'
+// Always write to ledger — powers the ticker, report, and local cost tracking
+const shouldWriteLedger = mode !== 'test-disabled' && mode !== 'prod-local'
 
 const dispatch = createDispatcher(mode, {
   logEvent: (e) => ticker.tick(e),
@@ -98,30 +99,17 @@ if (canPatch() && mode !== 'test-disabled' && mode !== 'prod-local') {
   markPatched()
 }
 
-// Batch flush on exit (must be registered before ticker signal handlers)
-if (batch) {
-  const exitFlush = () => {
-    batch!.flush()
-    batch!.destroy()
+// Cleanup on exit — flush batch and print summary
+// Only use 'exit' event — fires when process is already terminating
+// Never register SIGINT/SIGTERM handlers — that interferes with the app's lifecycle
+let exitHandled = false
+process.on('exit', () => {
+  if (exitHandled) return
+  exitHandled = true
+  if (batch) {
+    batch.flush()
+    batch.destroy()
   }
-  process.on('beforeExit', exitFlush)
-  process.on('SIGTERM', exitFlush)
-  process.on('SIGINT', exitFlush)
-  process.on('SIGHUP', exitFlush)
-}
-
-// Exit handlers — print ticker summary then re-emit signal
-// Registered after batch flush so flush runs first (Node fires listeners in order)
-const exitSignals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP']
-for (const signal of exitSignals) {
-  const handler = () => {
-    ticker.printExitSummary()
-    process.removeListener(signal, handler)
-    process.kill(process.pid, signal)
-  }
-  process.on(signal, handler)
-}
-process.on('beforeExit', () => {
   ticker.printExitSummary()
 })
 

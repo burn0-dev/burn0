@@ -28,7 +28,7 @@ describe('createDispatcher', () => {
     expect(addToBatch).not.toHaveBeenCalled()
   })
 
-  it('dev-cloud: calls logEvent and addToBatch', () => {
+  it('dev-cloud: calls logEvent, writeLedger, and addToBatch', () => {
     const logEvent = vi.fn()
     const writeLedger = vi.fn()
     const addToBatch = vi.fn()
@@ -37,11 +37,11 @@ describe('createDispatcher', () => {
     dispatch(makeEvent())
 
     expect(logEvent).toHaveBeenCalledOnce()
+    expect(writeLedger).toHaveBeenCalledOnce()
     expect(addToBatch).toHaveBeenCalledOnce()
-    expect(writeLedger).not.toHaveBeenCalled()
   })
 
-  it('prod-cloud: calls logEvent and addToBatch', () => {
+  it('prod-cloud: calls logEvent, writeLedger, and addToBatch', () => {
     const logEvent = vi.fn()
     const writeLedger = vi.fn()
     const addToBatch = vi.fn()
@@ -50,8 +50,8 @@ describe('createDispatcher', () => {
     dispatch(makeEvent())
 
     expect(logEvent).toHaveBeenCalledOnce()
+    expect(writeLedger).toHaveBeenCalledOnce()
     expect(addToBatch).toHaveBeenCalledOnce()
-    expect(writeLedger).not.toHaveBeenCalled()
   })
 
   it('prod-local: calls logEvent only', () => {

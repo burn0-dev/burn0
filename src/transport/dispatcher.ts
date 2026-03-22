@@ -12,9 +12,9 @@ export function createDispatcher(mode: RuntimeMode, deps: DispatcherDeps): (even
       case 'dev-local':
         deps.logEvent?.(event); deps.writeLedger?.(event); break
       case 'dev-cloud':
-        deps.logEvent?.(event); deps.addToBatch?.(event); break
+        deps.logEvent?.(event); deps.writeLedger?.(event); deps.addToBatch?.(event); break
       case 'prod-cloud':
-        deps.logEvent?.(event); deps.addToBatch?.(event); break
+        deps.logEvent?.(event); deps.writeLedger?.(event); deps.addToBatch?.(event); break
       case 'prod-local':
         deps.logEvent?.(event); break
       case 'test-enabled':
