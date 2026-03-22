@@ -35,9 +35,10 @@ program
 program
   .command('report')
   .description('Show cost summary')
-  .action(async () => {
+  .option('--today', 'Show today only')
+  .action(async (options: { today?: boolean }) => {
     const { runReport } = await import('./report')
-    await runReport()
+    await runReport(options)
   })
 
 program
