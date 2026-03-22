@@ -206,7 +206,8 @@ async function _runInit(): Promise<void> {
   const gitignorePath = path.join(cwd, '.gitignore')
   let gitignoreContent = ''
   try { gitignoreContent = fs.readFileSync(gitignorePath, 'utf-8') } catch {}
-  if (!gitignoreContent.includes('.env')) {
+  const gitignoreLines = gitignoreContent.split('\n').map(l => l.trim())
+  if (!gitignoreLines.includes('.env')) {
     ensureGitignore(cwd, '.env')
     console.log(chalk.green('  ✓ Added .env to .gitignore (protects your API keys)'))
   }
@@ -222,11 +223,12 @@ async function _runInit(): Promise<void> {
   console.log('')
 }
 
-function ensureGitignore(cwd: string, entry: string): void {
+export function ensureGitignore(cwd: string, entry: string): void {
   const gitignorePath = path.join(cwd, '.gitignore')
   let content = ''
   try { content = fs.readFileSync(gitignorePath, 'utf-8') } catch {}
-  if (!content.includes(entry)) {
+  const lines = content.split('\n').map(l => l.trim())
+  if (!lines.includes(entry)) {
     content += `${content && !content.endsWith('\n') ? '\n' : ''}${entry}\n`
     fs.writeFileSync(gitignorePath, content)
   }
