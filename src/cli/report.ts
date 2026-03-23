@@ -4,7 +4,7 @@ import { estimateLocalCost, fetchPricing } from '../transport/local-pricing'
 import { getApiKey } from '../config/env'
 import type { Burn0Event } from '../types'
 
-const BURN0_API_URL = process.env.BURN0_API_URL ?? 'https://api.burn0.dev'
+const BURN0_API_URL = process.env.BURN0_API_URL ?? 'https://burn0-server-production.up.railway.app'
 
 interface ReportData {
   total: { cost: number; calls: number }

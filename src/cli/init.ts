@@ -177,7 +177,7 @@ async function _runInit(): Promise<void> {
   // Sync config to server if API key was provided
   if (apiKey) {
     try {
-      const apiUrl = process.env.BURN0_API_URL ?? 'https://api.burn0.dev'
+      const apiUrl = process.env.BURN0_API_URL ?? 'https://burn0-server-production.up.railway.app'
       const res = await fetch(`${apiUrl}/v1/projects/config`, {
         method: 'POST',
         headers: {

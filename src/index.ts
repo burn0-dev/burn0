@@ -12,7 +12,7 @@ import { createTicker } from './transport/logger'
 import { fetchPricing, estimateLocalCost } from './transport/local-pricing'
 import type { Burn0Event } from './types'
 
-const BURN0_API_URL = process.env.BURN0_API_URL ?? 'https://api.burn0.dev'
+const BURN0_API_URL = process.env.BURN0_API_URL ?? 'https://burn0-server-production.up.railway.app'
 
 const apiKey = getApiKey()
 const mode = detectMode({ isTTY: isTTY(), apiKey })
