@@ -1,6 +1,6 @@
 {
   "name": "@burn0/burn0",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Lightweight cost observability for every API call in your stack",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -24,7 +24,13 @@
       "import": "./dist/track.mjs"
     }
   },
-  "files": ["dist", "scripts"],
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.mjs",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.mts",
+    "scripts"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -34,7 +40,18 @@
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/postinstall.js || true"
   },
-  "keywords": ["cost", "observability", "llm", "api", "tracking", "openai", "anthropic", "burn-rate", "cost-tracking", "api-costs"],
+  "keywords": [
+    "cost",
+    "observability",
+    "llm",
+    "api",
+    "tracking",
+    "openai",
+    "anthropic",
+    "burn-rate",
+    "cost-tracking",
+    "api-costs"
+  ],
   "author": "burn0",
   "license": "MIT",
   "repository": {
