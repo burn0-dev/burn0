@@ -137,7 +137,9 @@ export function createTicker(init: TickerInit): Ticker {
     if (pricedCalls === 0 && sessionCost === 0) {
       line = `\n  ${ORANGE}${BOLD}burn0 ▸${RESET} ${GRAY}session: ${sessionCalls} calls (${duration})${RESET} ${GRAY}──${RESET} ${GRAY}today: ${todayCalls} calls${RESET}\n`
     } else {
-      line = `\n  ${ORANGE}${BOLD}burn0 ▸${RESET} ${GRAY}session:${RESET} ${GREEN}${formatCost(sessionCost)}${RESET} ${GRAY}(${sessionCalls} calls, ${duration})${RESET} ${GRAY}──${RESET} ${GRAY}today:${RESET} ${GREEN}${formatCost(todayCost)}${RESET}\n`
+      const monthlyEst = todayCost > 0 ? formatCost(todayCost * 30) : null
+      const projPart = monthlyEst ? ` ${GRAY}──${RESET} ${GRAY}~${GREEN}${monthlyEst}${RESET}${GRAY}/mo${RESET}` : ''
+      line = `\n  ${ORANGE}${BOLD}burn0 ▸${RESET} ${GRAY}session:${RESET} ${GREEN}${formatCost(sessionCost)}${RESET} ${GRAY}(${sessionCalls} calls, ${duration})${RESET} ${GRAY}──${RESET} ${GRAY}today:${RESET} ${GREEN}${formatCost(todayCost)}${RESET}${projPart}\n`
     }
 
     process.stderr.write(line)

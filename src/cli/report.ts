@@ -160,6 +160,15 @@ function renderCostReport(data: ReportData, label: string, showDaily: boolean, i
     }
   }
 
+  // Projection
+  if (data.total.cost > 0) {
+    const daysInPeriod = showDaily ? 7 : 1
+    const dailyRate = data.total.cost / daysInPeriod
+    const monthly = dailyRate * 30
+    console.log(`\n  ${chalk.gray('── projection ─────────────────────────────')}`)
+    console.log(`  ${chalk.gray('~')}${chalk.green(formatCost(monthly))}${chalk.gray('/mo estimated')} ${chalk.dim(`(based on ${isToday ? 'today' : 'last 7 days'})`)}`)
+  }
+
   console.log()
 }
 
