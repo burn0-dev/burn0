@@ -9,7 +9,7 @@ import { BatchBuffer } from './transport/batch'
 import { LocalLedger } from './transport/local'
 import { shipEvents } from './transport/api'
 import { createTicker } from './transport/logger'
-import { fetchPricing, estimateLocalCost } from './transport/local-pricing'
+import { fetchPricing, loadCachedPricing, estimateLocalCost } from './transport/local-pricing'
 import type { Burn0Event } from './types'
 
 const BURN0_API_URL = process.env.BURN0_API_URL ?? 'https://burn0-server-production.up.railway.app'
@@ -22,7 +22,10 @@ const { track, startSpan, enrichEvent } = createTracker()
 // Store original fetch before patching (for API shipper and pricing fetch)
 const originalFetch = globalThis.fetch
 
-// Fetch pricing data from backend (non-blocking, uses original fetch)
+// Load cached pricing synchronously so ledger seed can estimate costs
+loadCachedPricing()
+
+// Then fetch fresh pricing in background (non-blocking, uses original fetch)
 if (mode !== 'test-disabled' && mode !== 'prod-local') {
   fetchPricing(BURN0_API_URL, originalFetch).catch(() => {})
 }

@@ -33,11 +33,11 @@ export type CostEstimate =
  * Fetch pricing from backend and cache locally.
  * Non-blocking — called on init, doesn't delay the app.
  */
-export async function fetchPricing(
-  apiUrl: string,
-  fetchFn: typeof globalThis.fetch
-): Promise<void> {
-  // Try cache first
+/**
+ * Load pricing from local cache synchronously.
+ * Called before ledger seed so ticker shows costs immediately.
+ */
+export function loadCachedPricing(): boolean {
   try {
     const cachePath = path.join(process.cwd(), CACHE_FILE)
     if (fs.existsSync(cachePath)) {
@@ -45,10 +45,19 @@ export async function fetchPricing(
       const cached = JSON.parse(raw) as PricingData & { cached_at: number }
       if (Date.now() - cached.cached_at < CACHE_TTL_MS) {
         pricingData = cached
-        return
+        return true
       }
     }
   } catch {}
+  return false
+}
+
+export async function fetchPricing(
+  apiUrl: string,
+  fetchFn: typeof globalThis.fetch
+): Promise<void> {
+  // Skip fetch if cache already loaded
+  if (pricingData) return
 
   // Fetch from backend
   try {
