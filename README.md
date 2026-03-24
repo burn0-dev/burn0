@@ -54,10 +54,10 @@ npm i @burn0/burn0
 Add one line to your entry file:
 
 ```typescript
-import '@burn0/burn0'  // Must be first import
+import "@burn0/burn0"; // Must be first import
 
-import express from 'express'
-import OpenAI from 'openai'
+import express from "express";
+import OpenAI from "openai";
 // ... your app runs exactly the same
 ```
 
@@ -128,18 +128,67 @@ resend         $0.15   ░░░░░░░░░░░░░░░░░░░
 
 ---
 
+## Dashboard — See Everything in One Place
+
+The terminal is great for development. But when you want history, trends, and team visibility — connect to the **free dashboard** at [burn0.dev](https://burn0.dev).
+
+### Get started in 60 seconds:
+
+```bash
+# 1. Sign in with GitHub
+open https://burn0.dev/login
+
+# 2. Go to your dashboard and copy your API key
+#    Dashboard → API Keys → Create Key
+
+# 3. Add the key to your project
+echo 'BURN0_API_KEY=b0_sk_your_key_here' >> .env
+
+# 4. Restart your app — costs now sync to the dashboard
+npm run dev
+```
+
+That's it. Every API call is now tracked in the dashboard.
+
+### What you'll see:
+
+| Feature                | Description                                                                 |
+| ---------------------- | --------------------------------------------------------------------------- |
+| **Live Event Feed**    | Every API call streams in real-time — service, model, tokens, cost, latency |
+| **Cost Breakdown**     | Per-service, per-model cost breakdown with visual charts                    |
+| **Monthly Projection** | Estimated monthly spend based on your actual usage trends                   |
+| **Request History**    | Full history of every tracked API call, searchable and filterable           |
+| **API Key Management** | Create, list, and revoke keys from the dashboard                            |
+
+### How it works:
+
+```
+Your app (with BURN0_API_KEY set)
+  │
+  ├─ Costs still appear in your terminal (nothing changes)
+  │
+  └─ Events also sync to burn0.dev ──→ Dashboard
+       │
+       ├─ Only metadata: service, model, tokens, cost, status, latency
+       └─ Never request/response bodies. Never your API keys.
+```
+
+> **Privacy**: burn0 never reads your request or response content. Only metadata is synced — service name, model, token counts, cost, status code, and latency. Your API keys and data stay on your machine.
+
+---
+
 ## Feature Attribution
 
 Know exactly which feature burns money:
 
 ```typescript
-import { track } from '@burn0/burn0'
+import { track } from "@burn0/burn0";
 
-await track('onboarding', async () => {
-  const profile = await ai.generateProfile(user)
-  await stripe.createSubscription(user.id)
-  await sendWelcomeEmail(user.email)
-})
+await track("onboarding", async () => {
+  const profile = await ai.generateProfile(user);
+  await stripe.createSubscription(user.id);
+  await sendWelcomeEmail(user.email);
+});
 ```
 
 ```
@@ -159,55 +208,55 @@ burn0 auto-detects services from hostnames. Zero configuration.
 
 ### AI / LLMs
 
-| Service | Detection | Pricing Model |
-|---|---|---|
-| OpenAI | `api.openai.com` | Per-token (exact) |
-| Anthropic | `api.anthropic.com` | Per-token (exact) |
+| Service       | Detection                           | Pricing Model     |
+| ------------- | ----------------------------------- | ----------------- |
+| OpenAI        | `api.openai.com`                    | Per-token (exact) |
+| Anthropic     | `api.anthropic.com`                 | Per-token (exact) |
 | Google Gemini | `generativelanguage.googleapis.com` | Per-token (exact) |
-| Mistral | `api.mistral.ai` | Per-token (exact) |
-| Cohere | `api.cohere.ai` | Per-token |
-| Groq | `api.groq.com` | Per-token |
-| Together AI | `api.together.xyz` | Per-token |
-| Perplexity | `api.perplexity.ai` | Per-token |
-| DeepSeek | `api.deepseek.com` | Per-token |
-| Replicate | `api.replicate.com` | Per-second |
-| Fireworks AI | `api.fireworks.ai` | Per-token |
-| AI21 Labs | `api.ai21.com` | Per-token |
-| Pinecone | `*.pinecone.io` | Per-request |
+| Mistral       | `api.mistral.ai`                    | Per-token (exact) |
+| Cohere        | `api.cohere.ai`                     | Per-token         |
+| Groq          | `api.groq.com`                      | Per-token         |
+| Together AI   | `api.together.xyz`                  | Per-token         |
+| Perplexity    | `api.perplexity.ai`                 | Per-token         |
+| DeepSeek      | `api.deepseek.com`                  | Per-token         |
+| Replicate     | `api.replicate.com`                 | Per-second        |
+| Fireworks AI  | `api.fireworks.ai`                  | Per-token         |
+| AI21 Labs     | `api.ai21.com`                      | Per-token         |
+| Pinecone      | `*.pinecone.io`                     | Per-request       |
 
 ### Pay-per-use APIs
 
-| Service | Detection | Pricing Model |
-|---|---|---|
-| Stripe | `api.stripe.com` | Per-transaction |
-| PayPal | `api.paypal.com` | Per-transaction |
-| Plaid | `*.plaid.com` | Per-request |
-| SendGrid | `api.sendgrid.com` | Per-email |
-| Resend | `api.resend.com` | Per-email |
-| Twilio | `api.twilio.com` | Per-message |
-| Vonage | `api.nexmo.com` | Per-message |
-| Algolia | `*.algolia.net` | Per-search |
-| Google Maps | `maps.googleapis.com` | Per-request |
-| Mapbox | `api.mapbox.com` | Per-request |
-| Cloudinary | `api.cloudinary.com` | Per-transform |
-| Sentry | `sentry.io` | Per-event |
-| Segment | `api.segment.io` | Per-event |
-| Mixpanel | `api.mixpanel.com` | Per-event |
+| Service     | Detection             | Pricing Model   |
+| ----------- | --------------------- | --------------- |
+| Stripe      | `api.stripe.com`      | Per-transaction |
+| PayPal      | `api.paypal.com`      | Per-transaction |
+| Plaid       | `*.plaid.com`         | Per-request     |
+| SendGrid    | `api.sendgrid.com`    | Per-email       |
+| Resend      | `api.resend.com`      | Per-email       |
+| Twilio      | `api.twilio.com`      | Per-message     |
+| Vonage      | `api.nexmo.com`       | Per-message     |
+| Algolia     | `*.algolia.net`       | Per-search      |
+| Google Maps | `maps.googleapis.com` | Per-request     |
+| Mapbox      | `api.mapbox.com`      | Per-request     |
+| Cloudinary  | `api.cloudinary.com`  | Per-transform   |
+| Sentry      | `sentry.io`           | Per-event       |
+| Segment     | `api.segment.io`      | Per-event       |
+| Mixpanel    | `api.mixpanel.com`    | Per-event       |
 
 ### Databases & Infrastructure
 
-| Service | Detection | Pricing Model |
-|---|---|---|
-| Supabase | `*.supabase.co` | Per-request |
-| PlanetScale | `*.psdb.cloud` | Per-request |
-| MongoDB Atlas | `*.mongodb.net` | Per-request |
-| Upstash | `*.upstash.io` | Per-request |
-| Neon | `*.neon.tech` | Per-request |
-| Turso | `*.turso.io` | Per-request |
-| Firebase | `*.firebaseio.com` | Per-request |
-| AWS S3 | `*.s3.amazonaws.com` | Per-request |
-| AWS Lambda | `lambda.*.amazonaws.com` | Per-invocation |
-| Vercel | `api.vercel.com` | Per-request |
+| Service       | Detection                | Pricing Model  |
+| ------------- | ------------------------ | -------------- |
+| Supabase      | `*.supabase.co`          | Per-request    |
+| PlanetScale   | `*.psdb.cloud`           | Per-request    |
+| MongoDB Atlas | `*.mongodb.net`          | Per-request    |
+| Upstash       | `*.upstash.io`           | Per-request    |
+| Neon          | `*.neon.tech`            | Per-request    |
+| Turso         | `*.turso.io`             | Per-request    |
+| Firebase      | `*.firebaseio.com`       | Per-request    |
+| AWS S3        | `*.s3.amazonaws.com`     | Per-request    |
+| AWS Lambda    | `lambda.*.amazonaws.com` | Per-invocation |
+| Vercel        | `api.vercel.com`         | Per-request    |
 
 **Unknown APIs are auto-tracked by request count.** Nothing slips through.
 
@@ -240,36 +289,23 @@ Your app starts
 
 ## Two Modes
 
-| Mode | API Key | What happens |
-|---|---|---|
-| **Local** (default) | No | Costs in terminal + local ledger. Zero network calls to burn0. |
-| **Cloud** (opt-in) | Yes | Same as local + events sync to dashboard for team visibility. |
+| Mode                | API Key | What happens                                                                                                  |
+| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
+| **Local** (default) | No      | Costs in terminal + local ledger. Zero network calls to burn0.                                                |
+| **Cloud** (opt-in)  | Yes     | Same as local + events sync to [dashboard](https://burn0.dev/dashboard) for full history and team visibility. |
 
-### Cloud Dashboard
-
-Connect an API key to see costs in the browser:
-
-- **Live event feed** — every API call in real-time via SSE
-- **Cost breakdown** — per service, per model, per day
-- **Monthly projection** — estimated monthly spend based on trends
-- **API key management** — create, list, revoke keys
-
-```bash
-# Sign in with GitHub at burn0.dev
-# Create an API key, then:
-npx burn0 connect
-```
+> **Start local, upgrade when ready.** burn0 works perfectly without an API key. When you want history and dashboards, add a key — it takes 60 seconds. [Get your free API key →](https://burn0.dev/login)
 
 ---
 
 ## Configuration
 
-| Env Variable | Default | Description |
-|---|---|---|
-| `BURN0_API_KEY` | — | API key for cloud mode |
-| `BURN0_API_URL` | `https://api.burn0.dev` | Backend URL |
-| `BURN0_DEBUG` | `false` | Enable debug logging |
-| `BURN0_ENABLE_TEST` | — | Set to `1` to enable in `NODE_ENV=test` |
+| Env Variable        | Default                 | Description                             |
+| ------------------- | ----------------------- | --------------------------------------- |
+| `BURN0_API_KEY`     | —                       | API key for cloud mode                  |
+| `BURN0_API_URL`     | `https://api.burn0.dev` | Backend URL                             |
+| `BURN0_DEBUG`       | `false`                 | Enable debug logging                    |
+| `BURN0_ENABLE_TEST` | —                       | Set to `1` to enable in `NODE_ENV=test` |
 
 ---
 
@@ -323,12 +359,12 @@ npm test
 
 ## Community
 
-| Channel | Link |
-|---|---|
-| 🌐 Website | [burn0.dev](https://burn0.dev) |
-| 📖 Docs | [docs.burn0.dev](https://docs.burn0.dev) |
-| 🐦 Twitter | [@burn0dev](https://twitter.com/burn0dev) |
-| 💻 GitHub | [burn0-dev/burn0](https://github.com/burn0-dev/burn0) |
+| Channel    | Link                                                  |
+| ---------- | ----------------------------------------------------- |
+| 🌐 Website | [burn0.dev](https://burn0.dev)                        |
+| 📖 Docs    | [docs.burn0.dev](https://docs.burn0.dev)              |
+| 🐦 Twitter | [@burn0dev](https://twitter.com/burn0dev)             |
+| 💻 GitHub  | [burn0-dev/burn0](https://github.com/burn0-dev/burn0) |
 
 ---
 
