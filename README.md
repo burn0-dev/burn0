@@ -73,6 +73,23 @@ On exit:
 burn0 ▸ session: $0.47 (12 calls, 4m 22s) ── today: $14.32 ── ~$430/mo
 ```
 
+### Want full history and dashboards? Add an API key:
+
+```bash
+# 1. Sign in with GitHub and create a key
+open https://burn0.dev/login
+#    → Dashboard → API Keys → Create Key
+
+# 2. Add it to your project
+echo 'BURN0_API_KEY=b0_sk_your_key_here' >> .env
+
+# 3. Restart — costs now sync to burn0.dev
+```
+
+Now you get a **live event feed**, **cost breakdown by service**, **monthly projections**, and **full request history** — all at [burn0.dev/dashboard](https://burn0.dev/dashboard).
+
+> burn0 only syncs metadata (service, model, tokens, cost, latency) — never request/response bodies or your API keys.
+
 ---
 
 ## How It Compares
@@ -125,55 +142,6 @@ resend         $0.15   ░░░░░░░░░░░░░░░░░░░
 ── projection ─────────────────────────────
 ~$53/mo estimated (based on last 7 days)
 ```
-
----
-
-## Dashboard — See Everything in One Place
-
-The terminal is great for development. But when you want history, trends, and team visibility — connect to the **free dashboard** at [burn0.dev](https://burn0.dev).
-
-### Get started in 60 seconds:
-
-```bash
-# 1. Sign in with GitHub
-open https://burn0.dev/login
-
-# 2. Go to your dashboard and copy your API key
-#    Dashboard → API Keys → Create Key
-
-# 3. Add the key to your project
-echo 'BURN0_API_KEY=b0_sk_your_key_here' >> .env
-
-# 4. Restart your app — costs now sync to the dashboard
-npm run dev
-```
-
-That's it. Every API call is now tracked in the dashboard.
-
-### What you'll see:
-
-| Feature                | Description                                                                 |
-| ---------------------- | --------------------------------------------------------------------------- |
-| **Live Event Feed**    | Every API call streams in real-time — service, model, tokens, cost, latency |
-| **Cost Breakdown**     | Per-service, per-model cost breakdown with visual charts                    |
-| **Monthly Projection** | Estimated monthly spend based on your actual usage trends                   |
-| **Request History**    | Full history of every tracked API call, searchable and filterable           |
-| **API Key Management** | Create, list, and revoke keys from the dashboard                            |
-
-### How it works:
-
-```
-Your app (with BURN0_API_KEY set)
-  │
-  ├─ Costs still appear in your terminal (nothing changes)
-  │
-  └─ Events also sync to burn0.dev ──→ Dashboard
-       │
-       ├─ Only metadata: service, model, tokens, cost, status, latency
-       └─ Never request/response bodies. Never your API keys.
-```
-
-> **Privacy**: burn0 never reads your request or response content. Only metadata is synced — service name, model, token counts, cost, status code, and latency. Your API keys and data stay on your machine.
 
 ---
 
