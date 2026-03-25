@@ -43,4 +43,32 @@ describe('detectServices', () => {
     fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify(pkg))
     expect(detectServices(tmpDir)).toEqual([])
   })
-})
+
+  it('detects Groq SDK', () => {
+    const pkg = { dependencies: { 'groq-sdk': '^0.3.0' } }
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify(pkg))
+    const result = detectServices(tmpDir)
+    expect(result).toContainEqual({
+      name: 'groq', package: 'groq-sdk', category: 'llm', autopriced: true,
+    })
+  })
+
+  it('detects Hugging Face Inference SDK', () => {
+    const pkg = { dependencies: { '@huggingface/inference': '^2.0.0' } }
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify(pkg))
+    const result = detectServices(tmpDir)
+    expect(result).toContainEqual({
+      name: 'huggingface', package: '@huggingface/inference', category: 'llm', autopriced: true,
+    })
+  })
+
+  it('detects Amazon Bedrock SDK', () => {
+    const pkg = { dependencies: { '@aws-sdk/client-bedrock-runtime': '^3.0.0' } }
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify(pkg))
+    const result = detectServices(tmpDir)
+    expect(result).toContainEqual({
+      name: 'amazon-bedrock', package: '@aws-sdk/client-bedrock-runtime', category: 'llm', autopriced: true,
+    })
+  })
+
+})  // ← describe closes here, at the very end
