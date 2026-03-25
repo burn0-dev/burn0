@@ -29,6 +29,14 @@ LLMs, SaaS, infrastructure. See per-request costs in real time.<br><br>
 
 ---
 
+
+### 🎬 See it in action
+
+
+https://github.com/user-attachments/assets/56962fc8-b9cf-49b2-9481-bc10aca6fb56
+
+</div>
+
 ## The Problem
 
 You're running OpenAI, Anthropic, Stripe, Supabase, SendGrid, and a dozen other APIs. Your monthly bill is $2,847 and climbing 340% month-over-month.
@@ -86,7 +94,7 @@ echo 'BURN0_API_KEY=b0_sk_your_key_here' >> .env
 # 3. Restart — costs now sync to burn0.dev
 ```
 
-Now you get a **live event feed**, **cost breakdown by service**, **monthly projections**, and **full request history** — all at [burn0.dev/dashboard](https://burn0.dev/dashboard).
+Now you get a **live event feed**, **cost breakdown by service**, **monthly projections**, and **full request history** — all at [burn0.dev/dashboard](https://burn0## The Problem.dev/dashboard).
 
 > burn0 only syncs metadata (service, model, tokens, cost, latency) — never request/response bodies or your API keys.
 
