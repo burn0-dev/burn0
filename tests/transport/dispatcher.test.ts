@@ -15,69 +15,23 @@ function makeEvent(): Burn0Event {
 }
 
 describe('createDispatcher', () => {
-  it('dev-local: calls logEvent and writeLedger', () => {
+  it('calls all deps for any active mode', () => {
     const logEvent = vi.fn()
     const writeLedger = vi.fn()
     const addToBatch = vi.fn()
 
-    const dispatch = createDispatcher('dev-local', { logEvent, writeLedger, addToBatch })
-    dispatch(makeEvent())
+    for (const mode of ['dev-local', 'dev-cloud', 'prod-cloud', 'prod-local', 'test-enabled'] as const) {
+      logEvent.mockClear()
+      writeLedger.mockClear()
+      addToBatch.mockClear()
 
-    expect(logEvent).toHaveBeenCalledOnce()
-    expect(writeLedger).toHaveBeenCalledOnce()
-    expect(addToBatch).not.toHaveBeenCalled()
-  })
+      const dispatch = createDispatcher(mode, { logEvent, writeLedger, addToBatch })
+      dispatch(makeEvent())
 
-  it('dev-cloud: calls logEvent, writeLedger, and addToBatch', () => {
-    const logEvent = vi.fn()
-    const writeLedger = vi.fn()
-    const addToBatch = vi.fn()
-
-    const dispatch = createDispatcher('dev-cloud', { logEvent, writeLedger, addToBatch })
-    dispatch(makeEvent())
-
-    expect(logEvent).toHaveBeenCalledOnce()
-    expect(writeLedger).toHaveBeenCalledOnce()
-    expect(addToBatch).toHaveBeenCalledOnce()
-  })
-
-  it('prod-cloud: calls logEvent, writeLedger, and addToBatch', () => {
-    const logEvent = vi.fn()
-    const writeLedger = vi.fn()
-    const addToBatch = vi.fn()
-
-    const dispatch = createDispatcher('prod-cloud', { logEvent, writeLedger, addToBatch })
-    dispatch(makeEvent())
-
-    expect(logEvent).toHaveBeenCalledOnce()
-    expect(writeLedger).toHaveBeenCalledOnce()
-    expect(addToBatch).toHaveBeenCalledOnce()
-  })
-
-  it('prod-local: calls logEvent only', () => {
-    const logEvent = vi.fn()
-    const writeLedger = vi.fn()
-    const addToBatch = vi.fn()
-
-    const dispatch = createDispatcher('prod-local', { logEvent, writeLedger, addToBatch })
-    dispatch(makeEvent())
-
-    expect(logEvent).toHaveBeenCalledOnce()
-    expect(writeLedger).not.toHaveBeenCalled()
-    expect(addToBatch).not.toHaveBeenCalled()
-  })
-
-  it('test-enabled: calls logEvent, writeLedger, and addToBatch', () => {
-    const logEvent = vi.fn()
-    const writeLedger = vi.fn()
-    const addToBatch = vi.fn()
-
-    const dispatch = createDispatcher('test-enabled', { logEvent, writeLedger, addToBatch })
-    dispatch(makeEvent())
-
-    expect(logEvent).toHaveBeenCalledOnce()
-    expect(writeLedger).toHaveBeenCalledOnce()
-    expect(addToBatch).toHaveBeenCalledOnce()
+      expect(logEvent).toHaveBeenCalledOnce()
+      expect(writeLedger).toHaveBeenCalledOnce()
+      expect(addToBatch).toHaveBeenCalledOnce()
+    }
   })
 
   it('test-disabled: is a no-op (calls nothing)', () => {
@@ -97,12 +51,14 @@ describe('createDispatcher', () => {
     const event = makeEvent()
     const logEvent = vi.fn()
     const writeLedger = vi.fn()
+    const addToBatch = vi.fn()
 
-    const dispatch = createDispatcher('dev-local', { logEvent, writeLedger })
+    const dispatch = createDispatcher('dev-cloud', { logEvent, writeLedger, addToBatch })
     dispatch(event)
 
     expect(logEvent).toHaveBeenCalledWith(event)
     expect(writeLedger).toHaveBeenCalledWith(event)
+    expect(addToBatch).toHaveBeenCalledWith(event)
   })
 
   it('works without optional deps (no crash)', () => {

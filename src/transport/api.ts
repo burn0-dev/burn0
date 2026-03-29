@@ -24,10 +24,17 @@ export async function shipEvents(
         },
         body: JSON.stringify({ events, sdk_version: SDK_VERSION }),
       })
-      if (response.ok) return true
+      if (response.ok) {
+        if (isDebug()) console.log(`[burn0] Shipped ${events.length} events`)
+        return true
+      }
+      if (isDebug()) {
+        const body = await response.text().catch(() => '')
+        console.warn(`[burn0] Shipping rejected: ${response.status} ${body}`)
+      }
     } catch (err) {
       if (isDebug()) {
-        console.warn('[burn0] Event shipping failed:', (err as Error).message)
+        console.warn('[burn0] Shipping failed:', (err as Error).message)
       }
     }
 
