@@ -1,6 +1,6 @@
 {
   "name": "@burn0/burn0",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Lightweight cost observability for every API call in your stack",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",

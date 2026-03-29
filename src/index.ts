@@ -75,13 +75,26 @@ const ticker = createTicker({ todayCost, todayCalls, perServiceCosts });
 let batch: BatchBuffer | null = null;
 let lateInitDone = false;
 
+let failedEvents: Burn0Event[] = [];
+
 function createBatch(key: string): BatchBuffer {
   return new BatchBuffer({
     sizeThreshold: 50,
     timeThresholdMs: 10000,
     maxSize: 500,
     onFlush: (events) => {
-      shipEvents(events, key, BURN0_API_URL, originalFetch).catch(() => {});
+      // Include any previously failed events
+      const toShip = failedEvents.length > 0 ? [...failedEvents, ...events] : events;
+      failedEvents = [];
+
+      shipEvents(toShip, key, BURN0_API_URL, originalFetch).then((ok) => {
+        if (!ok) {
+          // Keep failed events for next flush (cap at 500 to prevent memory leak)
+          failedEvents = toShip.slice(-500);
+        }
+      }).catch(() => {
+        failedEvents = toShip.slice(-500);
+      });
     },
   });
 }
@@ -131,6 +144,32 @@ function lateInit(event?: Burn0Event): void {
     batch.add(e);
   }
   pendingEvents.length = 0;
+
+  // Backfill: sync any ledger events that weren't shipped yet
+  syncLedger(lateKey);
+}
+
+function syncLedger(key: string): void {
+  try {
+    const unsynced = ledger.readUnsynced();
+    if (unsynced.length === 0) {
+      ledger.markSynced();
+      return;
+    }
+
+    // Ship unsynced ledger events in batches of 500
+    const promises: Promise<boolean>[] = [];
+    for (let i = 0; i < unsynced.length; i += 500) {
+      const chunk = unsynced.slice(i, i + 500);
+      promises.push(shipEvents(chunk, key, BURN0_API_URL, originalFetch));
+    }
+
+    Promise.all(promises).then((results) => {
+      if (results.every(Boolean)) {
+        ledger.markSynced();
+      }
+    }).catch(() => {});
+  } catch {}
 }
 
 // Always write to ledger — powers the ticker, report, and local cost tracking

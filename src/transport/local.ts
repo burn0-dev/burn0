@@ -4,6 +4,7 @@ import type { Burn0Event } from '../types'
 
 const BURN0_DIR = '.burn0'
 const LEDGER_FILE = 'costs.jsonl'
+const SYNC_MARKER_FILE = 'last-sync.txt'
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -28,6 +29,25 @@ export class LocalLedger {
       if (!content) return []
       return content.split('\n').map((line) => JSON.parse(line) as Burn0Event)
     } catch { return [] }
+  }
+
+  readUnsynced(): Burn0Event[] {
+    const all = this.read()
+    const lastSync = this.getLastSyncTime()
+    if (!lastSync) return all
+    return all.filter(e => new Date(e.timestamp).getTime() > lastSync)
+  }
+
+  markSynced(): void {
+    this.ensureDir()
+    fs.writeFileSync(path.join(this.dirPath, SYNC_MARKER_FILE), new Date().toISOString())
+  }
+
+  private getLastSyncTime(): number | null {
+    try {
+      const ts = fs.readFileSync(path.join(this.dirPath, SYNC_MARKER_FILE), 'utf-8').trim()
+      return new Date(ts).getTime()
+    } catch { return null }
   }
 
   private ensureDir(): void {
