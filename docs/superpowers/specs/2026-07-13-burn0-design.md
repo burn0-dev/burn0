@@ -160,6 +160,10 @@ Empty db → onboarding screen (install + import snippet). Footer: db size + int
 - **Integration:** local HTTP server + real undici/fetch/axios/got clients → assert rows; SSE fixture streams → assert tee non-blocking + usage extraction; concurrent writers (2+ processes, WAL) test.
 - **Failure injection:** locked db, full-ish disk simulation, malformed responses — app request must always succeed.
 
-## 11. Explicitly Deferred
+## 11. Direction (non-binding)
+
+Today: dev-only tool — the first place a developer looks to understand their backend's LLM and API usage. Positioning shorthand: "local Sentry / local Datadog" — zero cloud, zero infra. Possible future (explicitly not in scope, informs naming/README only): coding-agent usage tracking; correlating agent spend with code shipped to branches (productivity estimation).
+
+## 12. Explicitly Deferred
 
 Web dashboard package; bun/deno native support; non-HTTP protocols; sampling/production posture; per-request pricing for non-LLM APIs; cloud/team features.
