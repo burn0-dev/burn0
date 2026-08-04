@@ -13,14 +13,27 @@ export function pruneRetention(
 ): void {
   const scope = projectId != null ? ' AND project_id = ?' : ''
   const extra = projectId != null ? [projectId] : []
+  const metaCut = now - days.metadata * DAY
   db.prepare(`DELETE FROM payloads WHERE request_id IN (SELECT id FROM requests WHERE started_at < ?${scope})`)
     .run(now - days.payloads * DAY, ...extra)
-  db.prepare(`DELETE FROM requests WHERE started_at < ?${scope}`).run(now - days.metadata * DAY, ...extra)
+
+  // Count what is about to be deleted, onto the trace that owned it. This is
+  // the only honest source for "N calls expired": the sweep is the one actor
+  // that ever knows N (spec §4). Runs before the trace itself might be deleted
+  // below — the UPDATE and the later trace DELETE share the same cutoff, so a
+  // trace that ages out this pass still gets its count recorded first.
+  db.prepare(`UPDATE traces SET expired_calls = expired_calls + (
+      SELECT COUNT(*) FROM requests r
+      WHERE r.trace_id = traces.id AND r.started_at < ?${scope.replace('project_id', 'r.project_id')})
+    WHERE id IN (SELECT DISTINCT trace_id FROM requests
+      WHERE trace_id IS NOT NULL AND started_at < ?${scope})`)
+    .run(metaCut, ...extra, metaCut, ...extra)
+
+  db.prepare(`DELETE FROM requests WHERE started_at < ?${scope}`).run(metaCut, ...extra)
 
   // Traces and runs age out on the same clock as the requests they held. Deleted
   // explicitly rather than through ON DELETE CASCADE: better-sqlite3 leaves
   // `PRAGMA foreign_keys` off by default, so the cascade would silently not fire.
-  const metaCut = now - days.metadata * DAY
   db.prepare(`DELETE FROM tool_io WHERE trace_id IN (
       SELECT id FROM traces WHERE started_at < ?${scope})`).run(metaCut, ...extra)
   // children before parents, so no row is orphaned mid-delete

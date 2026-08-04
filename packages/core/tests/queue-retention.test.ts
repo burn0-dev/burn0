@@ -84,6 +84,75 @@ describe('pruneRetention', () => {
     db.close()
   })
 
+  it("increments a trace's expired_calls by the requests it loses in the sweep", () => {
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'burn0-ret4-')), 'burn0.db'))
+    const pid = ensureProject(db, { key: 'path:/x', name: 'app', rootPath: '/x', gitRoot: null })
+    const now = Date.now()
+    const day = 86_400_000
+    const runId = insertRun(db, { projectId: pid, service: null, pid: 1, entry: null, nodeVersion: null, now })
+    const w = createWriter(db, { projectId: pid, runId, service: null, capturePayloads: false })
+    w.write({
+      opened: [{
+        localId: 1, parentLocalId: null, name: 'trace', kind: 'http-server',
+        startedAt: now - 1 * day, endedAt: null, status: null, incomplete: false,
+      }],
+      closed: [],
+    }, [
+      fakeRow({ startedAt: now - 40 * day, trace: { localId: 1, seq: 1 } }),
+      fakeRow({ startedAt: now - 40 * day, trace: { localId: 1, seq: 2 } }),
+      fakeRow({ startedAt: now - 40 * day, trace: { localId: 1, seq: 3 } }),
+      fakeRow({ startedAt: now - 1 * day, trace: { localId: 1, seq: 4 } }),
+      fakeRow({ startedAt: now - 1 * day, trace: { localId: 1, seq: 5 } }),
+    ])
+
+    pruneRetention(db, { payloads: 7, metadata: 30 }, now, pid)
+
+    const trace = db.prepare(`SELECT expired_calls FROM traces WHERE name = 'trace'`).get()
+    expect(trace.expired_calls).toBe(3)
+    expect(db.prepare('SELECT COUNT(*) c FROM requests').get().c).toBe(2)
+    db.close()
+  })
+
+  it('still counts expired calls onto a trace that is itself pruned in the same pass, without orphaning', () => {
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'burn0-ret5-')), 'burn0.db'))
+    const pid = ensureProject(db, { key: 'path:/x', name: 'app', rootPath: '/x', gitRoot: null })
+    const now = Date.now()
+    const day = 86_400_000
+    const runId = insertRun(db, { projectId: pid, service: null, pid: 1, entry: null, nodeVersion: null, now })
+    const w = createWriter(db, { projectId: pid, runId, service: null, capturePayloads: false })
+    w.write({
+      opened: [
+        {
+          localId: 1, parentLocalId: null, name: 'old-trace', kind: 'http-server',
+          startedAt: now - 40 * day, endedAt: null, status: null, incomplete: false,
+        },
+        {
+          localId: 2, parentLocalId: null, name: 'surviving-trace', kind: 'http-server',
+          startedAt: now - 1 * day, endedAt: null, status: null, incomplete: false,
+        },
+      ],
+      closed: [],
+    }, [
+      // old-trace: itself outside the retention window, so its own row is pruned too
+      fakeRow({ startedAt: now - 40 * day, trace: { localId: 1, seq: 1 } }),
+      fakeRow({ startedAt: now - 40 * day, trace: { localId: 1, seq: 2 } }),
+      // surviving-trace: 3 old requests expire, 1 recent one stays
+      fakeRow({ startedAt: now - 40 * day, trace: { localId: 2, seq: 1 } }),
+      fakeRow({ startedAt: now - 40 * day, trace: { localId: 2, seq: 2 } }),
+      fakeRow({ startedAt: now - 40 * day, trace: { localId: 2, seq: 3 } }),
+      fakeRow({ startedAt: now - 1 * day, trace: { localId: 2, seq: 4 } }),
+    ])
+
+    expect(() => pruneRetention(db, { payloads: 7, metadata: 30 }, now, pid)).not.toThrow()
+
+    // old-trace is gone — no orphaned trace row, no error from updating a row
+    // that gets deleted moments later in the same pass
+    expect(db.prepare(`SELECT COUNT(*) c FROM traces`).get().c).toBe(1)
+    const surviving = db.prepare(`SELECT expired_calls FROM traces WHERE name = 'surviving-trace'`).get()
+    expect(surviving.expired_calls).toBe(3)
+    db.close()
+  })
+
   it('prunes only the given project — one repo cannot expire another repo rows', () => {
     const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'burn0-ret2-')), 'burn0.db'))
     const mine = ensureProject(db, { key: 'path:/mine', name: 'mine', rootPath: '/mine', gitRoot: null })
