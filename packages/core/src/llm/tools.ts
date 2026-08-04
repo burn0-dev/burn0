@@ -18,7 +18,7 @@ export interface ToolResult {
 }
 
 /** Tool calls declared by an assistant response. Handles OpenAI `tool_calls`,
- *  Anthropic `tool_use` blocks, and the SSE delta form of the former. */
+ *  Anthropic `tool_use` blocks, and both SSE delta forms (OpenAI `delta.tool_calls`, Anthropic `content_block_start`/`input_json_delta`). */
 export function parseToolCalls(resBody: string | null): ToolCall[] {
   if (!resBody) return []
   try {
@@ -77,6 +77,24 @@ function fromSSE(raw: string): ToolCall[] {
         if (typeof d?.function?.arguments === 'string') slot.args += d.function.arguments
         acc.set(i, slot)
       }
+    }
+    // Anthropic stream: a tool_use block opens with its id and name in
+    // content_block_start; the arguments arrive as input_json_delta fragments
+    // that concatenate in order. `index` is shared with text blocks, but only
+    // tool_use ever sets id+name, so the final filter drops text slots.
+    if (chunk?.type === 'content_block_start' && chunk.content_block?.type === 'tool_use') {
+      const i = typeof chunk.index === 'number' ? chunk.index : 0
+      acc.set(i, {
+        id: typeof chunk.content_block.id === 'string' ? chunk.content_block.id : null,
+        name: typeof chunk.content_block.name === 'string' ? chunk.content_block.name : null,
+        args: '',
+      })
+    }
+    if (chunk?.type === 'content_block_delta' && chunk.delta?.type === 'input_json_delta'
+        && typeof chunk.delta.partial_json === 'string') {
+      const i = typeof chunk.index === 'number' ? chunk.index : 0
+      const slot = acc.get(i)
+      if (slot) slot.args += chunk.delta.partial_json
     }
   }
   const out: ToolCall[] = []

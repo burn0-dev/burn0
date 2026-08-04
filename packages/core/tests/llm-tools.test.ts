@@ -62,6 +62,53 @@ describe('parseToolCalls', () => {
     expect(() => parseToolCalls('{"choices":[{"message":{"tool_calls":')).not.toThrow()
     expect(parseToolCalls('{"choices":[{"message":{"tool_calls":[{"id":1}]}}]}')).toEqual([])
   })
+
+  describe('Anthropic SSE tool calls', () => {
+    const sse = [
+      'event: message_start',
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":2}}}',
+      '',
+      'event: content_block_start',
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+      '',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Let me check."}}',
+      '',
+      'event: content_block_start',
+      'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01A","name":"sap_execute_sap_operation","input":{}}}',
+      '',
+      // arguments split MID-KEY across deltas — the shape that breaks naive parsers
+      'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"opera"}}',
+      '',
+      'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"tion\\":\\"GET\\",\\"path\\":\\"/A_SalesOrder\\"}"}}',
+      '',
+      'data: {"type":"content_block_stop","index":1}',
+      '',
+      'data: {"type":"message_delta","usage":{"output_tokens":9}}',
+      '',
+    ].join('\n')
+
+    it('accumulates tool_use blocks from content_block_start + input_json_delta', () => {
+      const calls = parseToolCalls(sse)
+      expect(calls).toEqual([{
+        id: 'toolu_01A',
+        name: 'sap_execute_sap_operation',
+        args: '{"operation":"GET","path":"/A_SalesOrder"}',
+      }])
+    })
+
+    it('a text-only Anthropic stream declares no tools', () => {
+      const textOnly = sse.split('\n').filter((l) => !l.includes('tool_use') && !l.includes('input_json_delta') && !l.includes('content_block_stop')).join('\n')
+      expect(parseToolCalls(textOnly)).toEqual([])
+    })
+
+    it('empty-input tool call yields args null', () => {
+      const noArgs = [
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_02B","name":"sap_list_entities","input":{}}}',
+        'data: {"type":"content_block_stop","index":0}',
+      ].join('\n')
+      expect(parseToolCalls(noArgs)).toEqual([{ id: 'toolu_02B', name: 'sap_list_entities', args: null }])
+    })
+  })
 })
 
 describe('parseToolResults', () => {
