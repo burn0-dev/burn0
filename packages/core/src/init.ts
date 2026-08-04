@@ -10,7 +10,9 @@ import { enrich } from './capture/enrich.js'
 import { patchFetch, type EmitFn } from './capture/fetch-patch.js'
 import { patchHttp } from './capture/http-patch.js'
 import { patchServers } from './capture/server-patch.js'
+import { patchBunServe } from './capture/bun-serve-patch.js'
 import { subscribeUndici } from './capture/undici-dc.js'
+import { detectRuntime, runtimeCapabilities, runtimeVersion } from './runtime.js'
 import type { CaptureEvent } from './types.js'
 
 /** A trace open this long is not going to close on its own. Generous, because
@@ -31,10 +33,12 @@ let active: Burn0Handle | null = null
 export function initBurn0(overrides: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Burn0Handle | null {
   if (active) return active
   try {
-    // Runtime gate: Node only (dev tool; bun native support is roadmap)
-    const isNode = typeof process !== 'undefined' && !!process.versions?.node &&
-      !(process.versions as any).bun && !(globalThis as any).Deno
-    if (!isNode) {
+    // Runtime gate: Node and Bun have real capture paths; anything else is
+    // disabled loudly rather than half-working. The capability table — not the
+    // runtime name — decides which patches install below.
+    const runtime = detectRuntime()
+    const caps = runtimeCapabilities(runtime)
+    if (runtime !== 'node' && runtime !== 'bun') {
       try { process.stderr.write('[burn0] unsupported runtime, capture disabled\n') } catch {}
       return null
     }
@@ -51,7 +55,7 @@ export function initBurn0(overrides: { cwd?: string; env?: NodeJS.ProcessEnv } =
       projectId, service,
       pid: process.pid,
       entry: process.argv[1] ? basename(process.argv[1]) : null,
-      nodeVersion: process.version,
+      nodeVersion: runtimeVersion(runtime),
     })
     // The writer prunes its own project, on its own config. Doing this from a
     // read command made `burn0 export` destructive and let one project's
@@ -95,12 +99,17 @@ export function initBurn0(overrides: { cwd?: string; env?: NodeJS.ProcessEnv } =
     }
 
     const captureOpts = { ignoreHosts: cfg.ignoreHosts, bodyCapBytes: cfg.bodyCapBytes }
-    const unpatchFetch = patchFetch(emit, captureOpts)
-    const unpatchHttp = patchHttp(emit, captureOpts)
-    const unsubDc = subscribeUndici(emit, captureOpts)
+    const noop = () => {}
+    const unpatchFetch = caps.patchFetch ? patchFetch(emit, captureOpts) : noop
+    const unpatchHttp = caps.patchNodeHttp ? patchHttp(emit, captureOpts) : noop
+    const unsubDc = caps.subscribeUndici ? subscribeUndici(emit, captureOpts) : noop
     // Inbound requests: opt-out, not opt-in (D5). Passive apart from one
-    // `als.run` and an integer increment — no synchronous write on the request path.
-    const unpatchServers = cfg.traceHttp ? patchServers() : () => {}
+    // `als.run` and an integer increment — no synchronous write on the request
+    // path. Node roots at Server.prototype.emit; Bun roots at Bun.serve.
+    const unpatchServers = !cfg.traceHttp ? noop
+      : caps.patchNodeServers ? patchServers()
+      : caps.patchBunServe ? patchBunServe()
+      : noop
 
     const flushOnExit = () => { try { queue.flushNow() } catch {} }
     process.on('beforeExit', flushOnExit)

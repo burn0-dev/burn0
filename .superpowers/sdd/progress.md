@@ -148,3 +148,84 @@ tree is reproduced verbatim in spec §8.
   span, because an LLM call is a `requests` row and has no span. Prerequisite for nested agents.
 - Q1.1 (`burn0 projects rm`) still open.
 - `--project`/`--service` are parsed and scoped but have no TUI equivalent beyond `p`/`s`.
+
+---
+
+## 2026-08-04 — Bun + Hono support (spec §13)
+
+Bun 1.3.x is now a first-class capture runtime. `bun --import burn0/register src/index.ts`
+(also `--preload`; composes with `--watch`/`--hot`) gives the same zero-instrumentation
+capture as Node: auto-rooted trace per inbound request, outbound LLM/API calls under it in
+`seq` order, one SQLite file the Node CLI reads unchanged.
+
+**Design in one line:** runtime **capability table** (`src/runtime.ts`) → init wires patches
+from capabilities, never runtime names. Bun gets `fetch-patch` (unchanged) +
+`bun-serve-patch`; Node path untouched. Storage picks `bun:sqlite` vs better-sqlite3 at
+`openDriver()`.
+
+**Verified end to end:** Hono agent route on `Bun.serve` under `--watch`,
+`NODE_ENV=production BURN0_FORCE=1`, one `POST /api/conversations/48213/chat` → the §2.6/§8
+tree (declare-tool gpt-4o 640→28 · 🔧 search_orders `window`-attributed holding /query +
+/v1/charges · final gpt-4o 1204→380, costs computed) — rendered by **Node** `burn0 today`
+and `query.traceTree` from the Bun-written DB. Suites: 17 bun:test green
+(`pnpm --filter @burn0/core test:bun`), Node regression core 241 + cli 88 green.
+
+### Traps found — do not rediscover
+
+- **Bun auto-serves `export default app` through the patchable JS `Bun.serve` property**
+  (measured 1.3.9). This is the fact the whole design stands on — no Hono adapter, no
+  route integration, one property wrap covers every serve shape. Wrap `options.fetch`,
+  `options.routes` (incl. per-method maps), and `server.reload`.
+- **better-sqlite3 under Bun is undefined behavior, not a clean fail.** Script mode:
+  require refused ("not yet supported", oven-sh/bun#4290). `bun test` mode: require
+  *succeeds*, then the process **hangs on first use** of the addon. Consequence: both
+  sqlite bindings load via lazy `createRequire` inside `openDriver` — a top-level import
+  dies before init's try/catch exists. Do not assert on the exact failure mode in tests;
+  it differs by entry mode.
+- **In-process mock vendors must start *before* `initBurn0` in bun tests** — same trap as
+  the Node demo (vendors got auto-rooted traces), solved by ordering instead of a second
+  process: patches only wrap servers created after init.
+- **vitest's default glob eats `tests/bun/`** — bun:test files import `bun:sqlite` and Bun
+  globals, so core now has a `vitest.config.ts` excluding them. Symmetric risk: `bun test`
+  run from the package root would try the vitest files; scripts pin `bun test tests/bun`.
+- ALS propagation through `Bun.serve` handler → outbound fetch → teed SSE body: works,
+  verified with a real Hono router before any code was written.
+
+### Limitations (documented in spec §13.3 / README)
+
+fetch-only outbound capture; no auto-roots for Bun's `node:http` compat servers
+(`Bun.serve` is the primitive); post-return `ReadableStream` work may fall outside the
+trace; WS upgrades close with status NULL; tested on 1.3.9 only.
+
+### Next
+
+- Q13.1 `patchHttp` under Bun (axios-on-Bun) once compat internals verified.
+- Q13.3 defer Bun trace close to body completion for streaming Responses?
+- Unchanged from previous entry: §12.1a `g` grouping, §5/§6 API pricing, Q8.6, Q1.1.
+
+### Addendum, same day — streaming agent loops broke the first cut (fixed)
+
+First real backend (LangGraph on Bun/Hono) surfaced it within hours: a streaming chat
+route returns its SSE Response in ~ms, then runs the agent loop *inside* the response
+stream for tens of seconds. Close-at-handler-resolve (what the task spec literally asked
+for) orphaned every LLM call made after the return — each rendered as an individual
+untraced model-labeled row instead of nesting under `POST /chat`.
+
+Two fixes, both tested:
+
+- **`bun-serve-patch` now matches Node's close semantics** (close after last byte, not
+  after handler). Unsized `ReadableStream` bodies are replaced with a manual reader-pump
+  that closes the trace on completion *or client cancel* — pump, not
+  `pipeThrough(TransformStream)`, because TransformStream has no cancel hook and
+  disconnect is exactly the case that must still close (Node's 'close'-beside-'finish'
+  lesson, again). Fixed-length bodies (`Bun.file` sendfile path) and bodiless responses
+  still close at resolution. Stale sweep unchanged as backstop.
+- **Writer race, runtime-independent:** a row can land one flush after its trace's close,
+  when `localToDb` had already dropped the mapping → trace_id NULL. `createWriter` now
+  keeps closed mappings for one extra flush cycle (`deleteNextFlush`).
+
+Regression tests: `tests/bun/serve-trace.test.ts` — agent-loop-in-stream (2 LLM calls
+40ms+ after handler return share one trace, seq 0/1, trace spans the stream) and
+client-disconnect-mid-SSE (trace closes via cancel, not leaked). 19 bun + 241/88 node
+green. Spec Q13.3 resolved; §13.2/§13.3 + README updated. Dist rebuilt — restart any
+preloaded app to pick it up.

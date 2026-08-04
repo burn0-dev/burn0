@@ -9,6 +9,7 @@ export {
 export { pruneRetention, maybeVacuum } from './storage/retention.js'
 export { loadPricing, computeCost, type PricingTable } from './pricing/index.js'
 export { initBurn0, type Burn0Handle } from './init.js'
+export { detectRuntime, runtimeCapabilities, runtimeVersion, type Runtime, type RuntimeCapabilities } from './runtime.js'
 export * as query from './query/index.js'
 export type {
   TraceRow, UsageRow, UsageNode, Scope, ProjectSummary, TraceFilter,

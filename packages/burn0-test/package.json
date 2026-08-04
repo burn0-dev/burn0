@@ -6,6 +6,7 @@
   "description": "Manual test app for burn0 — generates real traffic to inspect in the dashboard",
   "scripts": {
     "agent": "node --import @burn0/core/register src/agent-server.mjs",
+    "bun-agent": "bun --import @burn0/core/register src/bun-hono-agent.ts",
     "demo": "node --import @burn0/core/register src/demo.mjs",
     "seed-llm": "node src/seed-llm.mjs",
     "stream": "node --import @burn0/core/register src/stream.mjs",
@@ -13,6 +14,7 @@
     "tagged": "node --import @burn0/core/register src/tagged.mjs"
   },
   "dependencies": {
-    "@burn0/core": "workspace:*"
+    "@burn0/core": "workspace:*",
+    "hono": "^4.0.0"
   }
 }

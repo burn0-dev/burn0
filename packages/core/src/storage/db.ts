@@ -3,14 +3,17 @@ import { dirname } from 'node:path'
 import { SCHEMA_VERSION, type EnrichedRow } from '../types.js'
 import type { ProjectIdentity } from '../project/index.js'
 import type { PendingTrace, TraceStep } from '../context/trace.js'
-import { openBetterSqlite, type StorageDriver } from './driver.js'
+import { openDriver, type StorageDriver } from './driver.js'
 import { DDL } from './schema.js'
 
 export type { StorageDriver, PreparedStmt } from './driver.js'
 
 export function openDatabase(dbPath: string): StorageDriver {
   mkdirSync(dirname(dbPath), { recursive: true })
-  let db = openBetterSqlite(dbPath)
+  // Runtime-appropriate binding (better-sqlite3 on Node, bun:sqlite on Bun) —
+  // one file format either way, so CLI and instrumented app never need to agree
+  // on a runtime, only on a path.
+  let db = openDriver(dbPath)
   db.pragma('journal_mode = WAL')
   db.exec(DDL)
   const row = db.prepare(`SELECT value FROM meta WHERE key='schema_version'`).get()
@@ -24,7 +27,7 @@ export function openDatabase(dbPath: string): StorageDriver {
     for (const suffix of ['-wal', '-shm']) {
       if (existsSync(dbPath + suffix)) rmSync(dbPath + suffix)
     }
-    db = openBetterSqlite(dbPath)
+    db = openDriver(dbPath)
     db.pragma('journal_mode = WAL')
     db.exec(DDL)
     db.prepare(`INSERT INTO meta (key, value) VALUES ('schema_version', ?)`).run(String(SCHEMA_VERSION))
@@ -72,6 +75,7 @@ export interface WriteCtx {
  *  within the transaction is not optional: traces first, then requests. */
 export function createWriter(db: StorageDriver, ctx: WriteCtx) {
   const localToDb = new Map<number, number>()
+  let deleteNextFlush: number[] = []
 
   const insTrace = db.prepare(`INSERT INTO traces
     (run_id, project_id, parent_id, name, kind, started_at, ended_at, status, incomplete,
@@ -127,9 +131,14 @@ export function createWriter(db: StorageDriver, ctx: WriteCtx) {
           JSON.stringify(r.resHeaders), r.resBody, r.stackSnippet, r.reqTruncated ? 1 : 0, r.resTruncated ? 1 : 0)
       }
     }
-    // Closed traces will never be referenced again; keeping their ids forever
-    // would make this map a slow leak on a long-lived server.
-    for (const t of traces.closed) localToDb.delete(t.localId)
+    // Closed traces are nearly done being referenced; keeping their ids forever
+    // would make this map a slow leak on a long-lived server. But not *quite*
+    // done: a call that started inside the trace can emit its row moments after
+    // the close (its response body finishes right as the inbound stream does),
+    // landing one flush later. Deleting immediately turned that row's trace_id
+    // NULL. One flush cycle of grace closes the race; the leak stays bounded.
+    for (const id of deleteNextFlush) localToDb.delete(id)
+    deleteNextFlush = traces.closed.map((t) => t.localId)
   })
 
   return {
