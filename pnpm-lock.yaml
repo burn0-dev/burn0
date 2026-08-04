@@ -28,6 +28,9 @@ importers:
       react:
         specifier: ^18.3.1
         version: 18.3.1
+      string-width:
+        specifier: ^7.2.0
+        version: 7.2.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
