@@ -20,4 +20,17 @@ describe('glyphs', () => {
     expect(truncLeft(p, 36)).toBe('…/API_SALES_ORDER_SRV/A_SalesOrder') // slash at kept-index ≤4 → snap
     expect(truncLeft(p, 3)).toBe('…er')
   })
+
+  it('truncLeft with wide chars maintains display width boundary', () => {
+    const result = truncLeft('/api/data/漢字テスト/records', 12)
+    expect(visWidth(result)).toBeLessThanOrEqual(12)
+    expect(result.startsWith('…')).toBe(true)
+    expect(result === [...result].join('')).toBe(true) // no replacement chars
+  })
+
+  it('truncLeft with non-BMP chars avoids splitting surrogates', () => {
+    const result = truncLeft('/files/𝕏𝕐ℤ/item', 8)
+    expect(visWidth(result)).toBeLessThanOrEqual(8)
+    expect(!result.includes('�')).toBe(true) // no replacement char (U+FFFD)
+  })
 })

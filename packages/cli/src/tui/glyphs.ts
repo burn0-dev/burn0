@@ -33,11 +33,31 @@ export function padCell(s: string, w: number, align: 'left' | 'right' = 'left'):
 /** Left-truncation for endpoint tails: the tail is where the signal lives.
  *  `…` is always exactly one char, always leftmost. Snap forward to a `/`
  *  only when one occurs within the first 4 kept chars — a greedy break-at-/
- *  would collapse `…SRV/$metadata` to `…/$metadata` and destroy the signal. */
+ *  would collapse `…SRV/$metadata` to `…/$metadata` and destroy the signal.
+ *  Accumulates tail by display width from the END, iterating code points to
+ *  avoid splitting surrogate pairs on non-BMP characters. */
 export function truncLeft(path: string, w: number): string {
   if (stringWidth(path) <= w) return path
-  let tail = path.slice(-(w - 1))
-  const slash = tail.indexOf('/')
-  if (slash >= 0 && slash <= 4) tail = tail.slice(slash || 1)
+
+  // Accumulate tail by display width from the end, iterating code points
+  const codePoints = [...path]
+  let tail = ''
+  let usedWidth = 0
+
+  for (let i = codePoints.length - 1; i >= 0; i--) {
+    const cp = codePoints[i]
+    const cpWidth = stringWidth(cp)
+    if (usedWidth + cpWidth > w - 1) break
+    tail = cp + tail
+    usedWidth += cpWidth
+  }
+
+  // Apply slash-snap logic (slash index computed in code points)
+  const tailCodePoints = [...tail]
+  const slashIndex = tailCodePoints.indexOf('/')
+  if (slashIndex >= 0 && slashIndex <= 4) {
+    tail = tailCodePoints.slice(slashIndex || 1).join('')
+  }
+
   return G.elide + tail
 }
