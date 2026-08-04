@@ -75,3 +75,24 @@ describe('computeCost', () => {
     expect(computeCost(table, 'openai', 'unknown-model', { tokensIn: 10, tokensOut: 10, tokensCached: null, tokensCacheWrite: null, inputIncludesCache: true })).toBeNull()
   })
 })
+
+describe('cache-aware cost on normalized usage (spec §1.2)', () => {
+  const table = { 'anthropic/claude-sonnet-5': {
+    input_cost_per_token: 3e-6, output_cost_per_token: 15e-6,
+    cache_read_input_token_cost: 3e-7, cache_creation_input_token_cost: 3.75e-6,
+  } }
+  it('prices fresh + read + write at their own rates — the Anthropic regression', () => {
+    const cost = computeCost(table, 'anthropic', 'claude-sonnet-5', {
+      tokensIn: 47826, tokensOut: 846, tokensCached: 46800,
+      tokensCacheWrite: 1024, inputIncludesCache: true })
+    //   2·3e-6 + 46800·3e-7 + 1024·3.75e-6 + 846·15e-6
+    expect(cost).toBeCloseTo(0.000006 + 0.01404 + 0.00384 + 0.01269, 10)
+    // the old subset math computed max(0, 2−46800)=0 fresh and no write cost at all
+  })
+  it('missing cache rates fall back to the base input rate — never a fabricated multiplier', () => {
+    const bare = { m: { input_cost_per_token: 1e-6, output_cost_per_token: 2e-6 } }
+    const cost = computeCost(bare, null, 'm', {
+      tokensIn: 100, tokensOut: 10, tokensCached: 40, tokensCacheWrite: 10, inputIncludesCache: true })
+    expect(cost).toBeCloseTo(100 * 1e-6 + 10 * 2e-6, 12)   // fresh 50 + read 40 + write 10, all at 1e-6
+  })
+})

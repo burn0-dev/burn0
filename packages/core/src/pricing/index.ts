@@ -7,6 +7,7 @@ export interface PriceEntry {
   input_cost_per_token?: number
   output_cost_per_token?: number
   cache_read_input_token_cost?: number
+  cache_creation_input_token_cost?: number
 }
 export type PricingTable = Record<string, PriceEntry>
 
@@ -75,11 +76,13 @@ export function computeCost(
   // some genuinely free and some placeholders, and the data cannot distinguish
   // them. Multiplying by zero would write a paid call to the DB as free.
   if (!entry.input_cost_per_token && !entry.output_cost_per_token) return null
-  const cached = usage.tokensCached ?? 0
-  const uncachedIn = Math.max(0, (usage.tokensIn ?? 0) - cached)
+  const read = usage.tokensCached ?? 0
+  const write = usage.tokensCacheWrite ?? 0
+  const fresh = Math.max(0, (usage.tokensIn ?? 0) - read - write)
   const cost =
-    uncachedIn * (entry.input_cost_per_token ?? 0) +
-    cached * (entry.cache_read_input_token_cost ?? entry.input_cost_per_token ?? 0) +
+    fresh * (entry.input_cost_per_token ?? 0) +
+    read * (entry.cache_read_input_token_cost ?? entry.input_cost_per_token ?? 0) +
+    write * (entry.cache_creation_input_token_cost ?? entry.input_cost_per_token ?? 0) +
     (usage.tokensOut ?? 0) * (entry.output_cost_per_token ?? 0)
   return cost
 }
