@@ -58,7 +58,10 @@ export function fmtTok(n: number | null): string {
   while (i < units.length - 1 && v >= 999.5) { v /= 1000; i += 1 }
   let s = v < 100 ? v.toFixed(1) : String(Math.round(v))
   if (Number(s) >= 1000 && i < units.length - 1) { i += 1; s = (Number(s) / 1000).toFixed(1) }
+  // Float artifact: (99.95).toFixed(1) === "100.0" — string round-trip catches rounding that crossed a tier boundary
   else if (Number(s) >= 100 && s.includes('.')) s = String(Math.round(Number(s)))
+  // Terminal tier (B) ceiling: prevent unbounded width when value >= 1000B
+  if (i === units.length - 1 && Number(s) >= 1000) s = '999+'
   return s + units[i]
 }
 
