@@ -30,6 +30,21 @@ describe('subscribeUndici', () => {
     } finally { unsub() }
   })
 
+  it('reports byte volume as unknown, never as zero', async () => {
+    // The DC subscriber sees metadata only — it never observes body chunks, so it
+    // has no byte counts to report. Emitting 0 would render as "nothing transferred".
+    const events: CaptureEvent[] = []
+    const unsub = subscribeUndici((e) => events.push(e), { ignoreHosts: [], bodyCapBytes: 1048576 })
+    try {
+      const { body } = await undiciRequest(`http://127.0.0.1:${port}/bytes`)
+      await body.text()
+      await new Promise((r) => setTimeout(r, 100))
+      const hit = events.find((e) => e.url.includes('/bytes'))!
+      expect(hit.reqBytes).toBeNull()
+      expect(hit.resBytes).toBeNull()
+    } finally { unsub() }
+  })
+
   it('does NOT double-record fetch handled by patched fetch', async () => {
     const dcEvents: CaptureEvent[] = []
     const fetchEvents: CaptureEvent[] = []

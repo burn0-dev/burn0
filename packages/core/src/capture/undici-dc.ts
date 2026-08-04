@@ -1,6 +1,7 @@
 import { subscribe, unsubscribe } from 'node:diagnostics_channel'
 import { captureStackSnippet } from './stack.js'
 import { currentTags } from '../context/index.js'
+import { takeTraceStep } from '../context/trace.js'
 import { isMarked } from './dedup.js'
 import { hostIgnored, type EmitFn, type CaptureOpts } from './fetch-patch.js'
 
@@ -11,6 +12,7 @@ interface Pending {
   reqHeaders: Record<string, string>
   stackSnippet: string | null
   tags: Record<string, string> | null
+  trace: { localId: number; seq: number } | null
   status: number | null
   resHeaders: Record<string, string>
   firstByteMs: number | null
@@ -26,6 +28,10 @@ export function subscribeUndici(emit: EmitFn, opts: CaptureOpts): () => void {
       const req = message.request
       if (!req) return
       const url = new URL(req.origin ? `${req.origin}${req.path ?? '/'}` : req.path)
+      // Decide *before* taking a trace step. This subscriber also sees calls that
+      // patched fetch already recorded, and a skipped call that consumed a seq
+      // leaves a hole in the trace's ordering.
+      const skip = isMarked() || hostIgnored(url.hostname, opts.ignoreHosts)
       pending.set(req, {
         startedAt: Date.now(),
         method: (req.method ?? 'GET').toUpperCase(),
@@ -33,8 +39,9 @@ export function subscribeUndici(emit: EmitFn, opts: CaptureOpts): () => void {
         reqHeaders: parseRawHeaders(req.headers),
         stackSnippet: captureStackSnippet(),
         tags: currentTags(),
+        trace: skip ? null : takeTraceStep(),
         status: null, resHeaders: {}, firstByteMs: null,
-        skip: isMarked() || hostIgnored(url.hostname, opts.ignoreHosts),
+        skip,
       })
     } catch {}
   }
@@ -57,10 +64,11 @@ export function subscribeUndici(emit: EmitFn, opts: CaptureOpts): () => void {
       safeEmit({
         startedAt: p.startedAt, method: p.method, url: p.url.href, hostname: p.url.hostname,
         status: p.status, firstByteMs: p.firstByteMs, latencyMs: Date.now() - p.startedAt,
-        reqBytes: 0, resBytes: 0,
+        // the DC subscriber observes metadata only, never body chunks
+        reqBytes: null, resBytes: null,
         reqHeaders: p.reqHeaders, resHeaders: p.resHeaders,
         reqBody: null, resBody: null,
-        stackSnippet: p.stackSnippet, tags: p.tags, estimated: false,
+        stackSnippet: p.stackSnippet, tags: p.tags, trace: p.trace, estimated: false,
       }, false)
     } catch {}
   }

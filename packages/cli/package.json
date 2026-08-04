@@ -1,0 +1,27 @@
+{
+  "name": "@burn0/cli",
+  "version": "0.0.1",
+  "type": "module",
+  "engines": { "node": ">=20.6" },
+  "bin": { "burn0": "./dist/index.mjs" },
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@burn0/core": "workspace:*",
+    "ink": "^5.1.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "ink-testing-library": "^4.0.0",
+    "tsdown": "^0.22.7",
+    "typescript": "^5.7.0",
+    "unrun": "^0.3.1",
+    "vitest": "^3.0.0"
+  }
+}
