@@ -36,7 +36,7 @@ describe('computeCost resolution order', () => {
     'bare-only': { input_cost_per_token: 2e-6, output_cost_per_token: 0 },
     'free-model': { input_cost_per_token: 0, output_cost_per_token: 0 },
   }
-  const use = { tokensIn: 1_000_000, tokensOut: 0, tokensCached: null }
+  const use = { tokensIn: 1_000_000, tokensOut: 0, tokensCached: null, tokensCacheWrite: null, inputIncludesCache: true }
 
   it('prefers the provider-qualified entry over the bare name', () => {
     // bare-first billed Gemini at 1.5x the correct rate
@@ -66,12 +66,12 @@ describe('computeCost', () => {
   }
   it('computes cost with cached tokens billed at cache rate', () => {
     // 1000 in (200 cached) + 100 out: (800*2e-6)+(200*1e-6)+(100*1e-5) = 0.0028
-    expect(computeCost(table, 'openai', 'gpt-4o', { tokensIn: 1000, tokensOut: 100, tokensCached: 200 })).toBeCloseTo(0.0028, 10)
+    expect(computeCost(table, 'openai', 'gpt-4o', { tokensIn: 1000, tokensOut: 100, tokensCached: 200, tokensCacheWrite: null, inputIncludesCache: true })).toBeCloseTo(0.0028, 10)
   })
   it('falls back to provider/model key', () => {
-    expect(computeCost(table, 'groq', 'llama-3.3-70b', { tokensIn: 10, tokensOut: 10, tokensCached: null })).toBeCloseTo(0.00001, 12)
+    expect(computeCost(table, 'groq', 'llama-3.3-70b', { tokensIn: 10, tokensOut: 10, tokensCached: null, tokensCacheWrite: null, inputIncludesCache: true })).toBeCloseTo(0.00001, 12)
   })
   it('returns null for unknown model', () => {
-    expect(computeCost(table, 'openai', 'unknown-model', { tokensIn: 10, tokensOut: 10, tokensCached: null })).toBeNull()
+    expect(computeCost(table, 'openai', 'unknown-model', { tokensIn: 10, tokensOut: 10, tokensCached: null, tokensCacheWrite: null, inputIncludesCache: true })).toBeNull()
   })
 })
