@@ -49,4 +49,16 @@ describe('enrich', () => {
     expect(row.model).toBe('brand-new-model')
     expect(row.costUsd).toBeNull()
   })
+  it('normalizes Anthropic input to total-effective and stores cache write (spec §1.2)', () => {
+    const row = enrich({
+      ...base,
+      hostname: 'api.anthropic.com',
+      resBody: JSON.stringify({ model: 'claude-sonnet-5', usage: {
+        input_tokens: 2, output_tokens: 846,
+        cache_read_input_tokens: 46800, cache_creation_input_tokens: 1024 } }),
+    }, opts)
+    expect(row.tokensIn).toBe(47826)         // 2 + 46800 + 1024 — never again "2 → 846"
+    expect(row.tokensCached).toBe(46800)
+    expect(row.tokensCacheWrite).toBe(1024)
+  })
 })

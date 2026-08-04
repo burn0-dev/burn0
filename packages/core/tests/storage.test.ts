@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openDatabase, ensureProject, insertRows } from '../src/storage/db.js'
+import { openDatabase, ensureProject, insertRun, insertRows, createWriter } from '../src/storage/db.js'
 import { SCHEMA_VERSION, type EnrichedRow } from '../src/types.js'
 
 export function fakeRow(over: Partial<EnrichedRow> = {}): EnrichedRow {
@@ -15,7 +15,7 @@ export function fakeRow(over: Partial<EnrichedRow> = {}): EnrichedRow {
     tags: { userId: 'u1' }, estimated: false, trace: null,
     entity: 'OpenAI', entityClass: 'llm', provider: 'openai',
     normalizedEndpoint: '/v1/chat/completions', model: 'gpt-4o',
-    tokensIn: 10, tokensOut: 2, tokensCached: null, costUsd: 0.000045,
+    tokensIn: 10, tokensOut: 2, tokensCached: null, tokensCacheWrite: null, costUsd: 0.000045,
     reqTruncated: false, resTruncated: false,
     ...over,
   }
@@ -88,6 +88,30 @@ describe('storage', () => {
     const pid = ensureProject(db, { key: 'path:/x', name: 'app', rootPath: '/x', gitRoot: null })
     insertRows(db, pid, [fakeRow()], false)
     expect(db.prepare('SELECT COUNT(*) c FROM payloads').get().c).toBe(0)
+    db.close()
+  })
+
+  it('stores tokens_cache_write on the request row', () => {
+    const db = freshDb()
+    const pid = ensureProject(db, { key: 'path:/x', name: 'app', rootPath: '/x', gitRoot: null })
+    insertRows(db, pid, [fakeRow({ tokensCacheWrite: 1024 })], false)
+    expect(db.prepare(`SELECT tokens_cache_write FROM requests`).get().tokens_cache_write).toBe(1024)
+    db.close()
+  })
+
+  it('defaults expired_calls to 0 on a trace inserted through createWriter', () => {
+    const db = freshDb()
+    const pid = ensureProject(db, { key: 'path:/x', name: 'app', rootPath: '/x', gitRoot: null })
+    const runId = insertRun(db, { projectId: pid, service: null, pid: null, entry: null, nodeVersion: null })
+    const w = createWriter(db, { projectId: pid, runId, service: null, capturePayloads: false })
+    w.write({
+      opened: [{
+        localId: 1, parentLocalId: null, name: 'POST /api/chat', kind: 'http-server',
+        startedAt: 1_000, endedAt: null, status: null, incomplete: false,
+      }],
+      closed: [],
+    }, [])
+    expect(db.prepare(`SELECT expired_calls FROM traces`).get().expired_calls).toBe(0)
     db.close()
   })
 

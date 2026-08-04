@@ -31,9 +31,10 @@ export interface EnrichedRow extends CaptureEvent {
   tokensIn: number | null
   tokensOut: number | null
   tokensCached: number | null
+  tokensCacheWrite: number | null
   costUsd: number | null
   reqTruncated: boolean
   resTruncated: boolean
 }
 
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4

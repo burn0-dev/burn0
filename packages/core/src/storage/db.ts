@@ -89,8 +89,8 @@ export function createWriter(db: StorageDriver, ctx: WriteCtx) {
     (project_id, service, run_id, trace_id, seq,
      entity, entity_class, provider, method, url, normalized_endpoint, hostname,
      status, started_at, first_byte_ms, latency_ms, req_bytes, res_bytes,
-     model, tokens_in, tokens_out, tokens_cached, cost_usd, estimated, tags)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+     model, tokens_in, tokens_out, tokens_cached, tokens_cache_write, cost_usd, estimated, tags)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
   const insPay = db.prepare(`INSERT INTO payloads
     (request_id, req_headers, req_body, res_headers, res_body, stack_snippet, req_truncated, res_truncated)
     VALUES (?,?,?,?,?,?,?,?)`)
@@ -123,7 +123,7 @@ export function createWriter(db: StorageDriver, ctx: WriteCtx) {
         ctx.projectId, ctx.service, ctx.runId, traceId, traceId == null ? null : trace!.seq,
         r.entity, r.entityClass, r.provider, r.method, r.url, r.normalizedEndpoint, r.hostname,
         r.status, r.startedAt, r.firstByteMs, r.latencyMs, r.reqBytes, r.resBytes,
-        r.model, r.tokensIn, r.tokensOut, r.tokensCached, r.costUsd, r.estimated ? 1 : 0,
+        r.model, r.tokensIn, r.tokensOut, r.tokensCached, r.tokensCacheWrite, r.costUsd, r.estimated ? 1 : 0,
         r.tags ? JSON.stringify(r.tags) : null,
       )
       if (ctx.capturePayloads) {

@@ -15,7 +15,7 @@ export function baseRow(over: Partial<EnrichedRow> = {}): EnrichedRow {
     tags: null, estimated: false, trace: null,
     entity: 'OpenAI', entityClass: 'llm', provider: 'openai',
     normalizedEndpoint: '/v1/chat/completions', model: 'gpt-4o',
-    tokensIn: 100, tokensOut: 20, tokensCached: null, costUsd: 0.0005,
+    tokensIn: 100, tokensOut: 20, tokensCached: null, tokensCacheWrite: null, costUsd: 0.0005,
     reqTruncated: false, resTruncated: false,
     ...over,
   }

@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS traces (
   incomplete INTEGER NOT NULL DEFAULT 0,
   tool_status TEXT,              -- ok | error | unresolved  (§8)
   attribution TEXT,              -- exact | window | turn | none  (§8)
+  expired_calls INTEGER NOT NULL DEFAULT 0,
   tags TEXT
 );
 CREATE TABLE IF NOT EXISTS requests (
@@ -35,7 +36,7 @@ CREATE TABLE IF NOT EXISTS requests (
   method TEXT NOT NULL, url TEXT NOT NULL, normalized_endpoint TEXT NOT NULL, hostname TEXT NOT NULL,
   status INTEGER, started_at INTEGER NOT NULL, first_byte_ms INTEGER, latency_ms INTEGER,
   req_bytes INTEGER, res_bytes INTEGER,
-  model TEXT, tokens_in INTEGER, tokens_out INTEGER, tokens_cached INTEGER, cost_usd REAL,
+  model TEXT, tokens_in INTEGER, tokens_out INTEGER, tokens_cached INTEGER, tokens_cache_write INTEGER, cost_usd REAL,
   estimated INTEGER NOT NULL DEFAULT 0,
   tags TEXT
 );

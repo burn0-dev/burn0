@@ -1,6 +1,6 @@
 import { detectEntity, normalizeEndpoint } from '../entities/index.js'
 import { redactHeaders, redactBody } from '../storage/redact.js'
-import { extractModel, parseUsage, parseSSEUsage } from '../llm/parse.js'
+import { extractModel, parseUsage, parseSSEUsage, normalizeUsage } from '../llm/parse.js'
 import { parseToolCalls, parseToolResults } from '../llm/tools.js'
 import { openToolTrace, closeToolTrace } from '../context/trace.js'
 import { computeCost, type PricingTable } from '../pricing/index.js'
@@ -32,11 +32,14 @@ export function enrich(event: CaptureEvent, opts: EnrichOpts): EnrichedRow {
   let tokensCached: number | null = null
   let costUsd: number | null = null
   model = extractModel(event.reqBody, pathname, opts.isSSE ? null : event.resBody)
-  const usage = opts.isSSE ? parseSSEUsage(event.resBody ?? '') : parseUsage(event.resBody)
+  const rawUsage = opts.isSSE ? parseSSEUsage(event.resBody ?? '') : parseUsage(event.resBody)
+  const usage = rawUsage ? normalizeUsage(rawUsage) : null
+  let tokensCacheWrite: number | null = null
   if (usage) {
     tokensIn = usage.tokensIn
     tokensOut = usage.tokensOut
     tokensCached = usage.tokensCached
+    tokensCacheWrite = usage.tokensCacheWrite
     // Not gated on `provider`: a self-hosted gateway has provider null, and the
     // bare-name lookup is the correct answer for it. The old gate discarded the
     // cost of every gateway-routed LLM call outright.
@@ -60,7 +63,7 @@ export function enrich(event: CaptureEvent, opts: EnrichOpts): EnrichedRow {
     resBody: opts.redactDisabled ? resBody : redactBody(resBody),
     entity, entityClass, provider,
     normalizedEndpoint: normalizeEndpoint(pathname),
-    model, tokensIn, tokensOut, tokensCached, costUsd,
+    model, tokensIn, tokensOut, tokensCached, tokensCacheWrite, costUsd,
     reqTruncated, resTruncated,
   }
 }
