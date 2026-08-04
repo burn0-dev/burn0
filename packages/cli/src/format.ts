@@ -41,3 +41,31 @@ export function fmtAgo(epochMs: number, now = Date.now()): string {
   if (s < 86400) return `${Math.round(s / 3600)}h ago`
   return `${Math.round(s / 86400)}d ago`
 }
+
+/** The cache mark — presence-only (a glyph cannot lie about a quantity the
+ *  way a wrong total can). Shown iff known cache-read > 0. One definition for
+ *  every screen (spec §1.3). Width 1 under Ink's string-width — measured. */
+export const CACHE_MARK = '↺'
+
+/** Token magnitudes: exact <1k · one decimal to 99.9k · integer to 999k ·
+ *  same tiers at M and B · re-bucketed so 999,950 renders 1.0M, never 1000k. */
+export function fmtTok(n: number | null): string {
+  if (n == null) return '—'
+  if (n < 1000) return String(n)
+  const units = ['k', 'M', 'B']
+  let i = 0
+  let v = n / 1000
+  while (i < units.length - 1 && v >= 999.5) { v /= 1000; i += 1 }
+  let s = v < 100 ? v.toFixed(1) : String(Math.round(v))
+  if (Number(s) >= 1000 && i < units.length - 1) { i += 1; s = (Number(s) / 1000).toFixed(1) }
+  else if (Number(s) >= 100 && s.includes('.')) s = String(Math.round(Number(s)))
+  return s + units[i]
+}
+
+export function fmtTokPair(
+  tin: number | null, cached: number | null, tout: number | null, spaced = false,
+): string {
+  if (tin == null && tout == null) return '—'
+  const mark = (cached ?? 0) > 0 ? CACHE_MARK : ''
+  return `${fmtTok(tin)}${mark}${spaced ? ' → ' : '→'}${fmtTok(tout)}`
+}

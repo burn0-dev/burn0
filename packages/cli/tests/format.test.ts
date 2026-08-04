@@ -22,7 +22,7 @@ describe('fmtBytes', () => {
   })
 })
 
-import { fmtUsd, fmtNum, fmtMs, fmtAgo } from '../src/format.js'
+import { fmtUsd, fmtNum, fmtMs, fmtAgo, fmtTok, fmtTokPair, CACHE_MARK } from '../src/format.js'
 
 describe('format', () => {
   it('fmtUsd', () => {
@@ -44,4 +44,31 @@ describe('format', () => {
     expect(fmtAgo(now - 3 * 3_600_000, now)).toBe('3h ago')
     expect(fmtAgo(now - 5_000, now)).toBe('5s ago')
   })
+})
+
+describe('fmtTok (spec §1.3)', () => {
+  const cases: Array<[number | null, string]> = [
+    [null, '—'], [0, '0'], [846, '846'], [999, '999'],
+    [1000, '1.0k'], [4032, '4.0k'], [46802, '46.8k'], [99949, '99.9k'],
+    [99950, '100k'], [100000, '100k'], [999499, '999k'],
+    [999500, '1.0M'], [1200000, '1.2M'], [99940000, '99.9M'], [999500000, '1.0B'],
+  ]
+  for (const [n, want] of cases) it(`${n} → ${want}`, () => expect(fmtTok(n)).toBe(want))
+})
+describe('fmtTokPair', () => {
+  it('marks cache presence with ↺, unspaced', () =>
+    expect(fmtTokPair(46802, 46800, 846)).toBe(`46.8k${CACHE_MARK}→846`))
+  it('spaced form for the list column', () =>
+    expect(fmtTokPair(46802, 46800, 846, true)).toBe(`46.8k${CACHE_MARK} → 846`))
+  it('no mark when cache-read is 0 or unknown', () => {
+    expect(fmtTokPair(1204, 0, 380)).toBe('1.2k→380')
+    expect(fmtTokPair(1204, null, 380)).toBe('1.2k→380')
+  })
+  it('each side independently null — never renders null as 0', () => {
+    expect(fmtTokPair(1200, null, null)).toBe('1.2k→—')
+    expect(fmtTokPair(null, null, 846)).toBe('—→846')
+    expect(fmtTokPair(null, null, null)).toBe('—')
+  })
+  it('worst cell fits w12', () =>
+    expect(fmtTokPair(99900, 1, 99900).length).toBeLessThanOrEqual(12))
 })
