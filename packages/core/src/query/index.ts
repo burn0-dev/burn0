@@ -281,6 +281,10 @@ export interface TraceListRow {
   tokensIn: number
   tokensOut: number
   tokenCalls: number
+  /** Sum of cache-read tokens over the trace's requests. null iff none of them
+   *  reported cache info — distinct from "0 cached", which TraceList's `↺`
+   *  glyph must never imply for an unknown value. */
+  tokensCached: number | null
   durationMs: number | null
   /** '◆◇◆◇' — the trace's shape, readable before opening it. */
   steps: string
@@ -302,7 +306,8 @@ export function traceList(db: StorageDriver, opts: {
            COALESCE(SUM(CASE WHEN rq.cost_usd IS NOT NULL THEN 1 ELSE 0 END),0) pricedCalls,
            COALESCE(SUM(rq.tokens_in),0) tokensIn,
            COALESCE(SUM(rq.tokens_out),0) tokensOut,
-           COALESCE(SUM(CASE WHEN rq.tokens_in IS NOT NULL OR rq.tokens_out IS NOT NULL THEN 1 ELSE 0 END),0) tokenCalls
+           COALESCE(SUM(CASE WHEN rq.tokens_in IS NOT NULL OR rq.tokens_out IS NOT NULL THEN 1 ELSE 0 END),0) tokenCalls,
+           SUM(rq.tokens_cached) tokensCached
     FROM traces rt
     LEFT JOIN roots ro ON ro.root = rt.id
     LEFT JOIN requests rq ON rq.trace_id = ro.id
@@ -322,6 +327,7 @@ export function traceList(db: StorageDriver, opts: {
     incomplete: t.incomplete === 1,
     calls: t.calls, costUsd: t.costUsd, pricedCalls: t.pricedCalls,
     tokensIn: t.tokensIn, tokensOut: t.tokensOut, tokenCalls: t.tokenCalls,
+    tokensCached: t.tokensCached,
     durationMs: t.endedAt != null ? t.endedAt - t.startedAt : null,
     steps: shapes.get(t.id) ?? '',
   }))
@@ -332,7 +338,8 @@ export function traceList(db: StorageDriver, opts: {
   const rs = scopeSql(opts.scope, 'r')
   const loose = db.prepare(`
     SELECT r.id AS requestId, r.model, r.entity, r.started_at AS startedAt, r.status,
-           r.latency_ms AS latencyMs, r.cost_usd AS costUsd, r.tokens_in AS tokensIn, r.tokens_out AS tokensOut
+           r.latency_ms AS latencyMs, r.cost_usd AS costUsd, r.tokens_in AS tokensIn, r.tokens_out AS tokensOut,
+           r.tokens_cached AS tokensCached
     FROM requests r
     WHERE r.trace_id IS NULL AND r.entity_class = 'llm' AND ${rs.sql}
       ${opts.beforeStartedAt != null ? 'AND r.started_at < ?' : ''}
@@ -354,6 +361,7 @@ export function traceList(db: StorageDriver, opts: {
       tokensIn: r.tokensIn ?? 0,
       tokensOut: r.tokensOut ?? 0,
       tokenCalls: r.tokensIn != null || r.tokensOut != null ? 1 : 0,
+      tokensCached: r.tokensCached,
       durationMs: r.latencyMs,
       steps: LLM_MARK,
     })
@@ -384,18 +392,39 @@ export interface TraceTreeNode {
   depth: number
   label: string
   startedAt: number
+  endedAt: number | null
+  /** Forced null when the owning trace was force-closed by the sweep
+   *  (`incomplete`): an observation window is not a duration (spec §4). */
   durationMs: number | null
   status: number | null
   costUsd: number | null
   pricedCalls: number
   tokensIn: number | null
   tokensOut: number | null
+  /** null iff nothing in scope (this row, or its whole subtree for a
+   *  trace/tool node) ever reported cache info — distinct from "0 cached". */
+  tokensCached: number | null
+  tokensCacheWrite: number | null
+  /** Calls that reported either side of token usage. A request row is 0 or 1;
+   *  a trace/tool row is the count over its subtree. */
+  tokenCalls: number
+  /** Request rows only — a trace/tool row aggregates many requests, so a
+   *  single byte count would not mean anything. */
+  reqBytes: number | null
+  resBytes: number | null
   calls: number
   llm: boolean
   incomplete: boolean
   hostname: string | null
   model: string | null
+  /** Request rows only; null on trace/tool rows. Kept separate from `label`
+   *  so a fold header can group by verb without parsing it back out. */
+  method: string | null
   requestId: number | null
+  /** Calls this trace directly owned that the retention sweep deleted before
+   *  it could render them. 0 on request rows; not summed over a subtree —
+   *  each trace only knows what the sweep took from itself (spec §4). */
+  expiredCalls: number
   /** Tool nodes only. */
   toolStatus: string | null
   /** How this node's children were assigned: exact · window · turn · none.
@@ -407,7 +436,9 @@ export interface TraceTreeNode {
 /** The subtree of one trace, flattened depth-first and ready to indent.
  *  Ordered by `seq`, which is shared across the whole tree (see `context/trace.ts`),
  *  so a nested trace sorts against its siblings by when its first call happened. */
-export function traceTree(db: StorageDriver, traceId: number): TraceTreeNode[] {
+export function traceTree(
+  db: StorageDriver, traceId: number,
+): { root: TraceTreeNode; nodes: TraceTreeNode[] } | null {
   const traces = db.prepare(`
     WITH RECURSIVE subtree(id) AS (
       SELECT id FROM traces WHERE id = ?
@@ -416,15 +447,17 @@ export function traceTree(db: StorageDriver, traceId: number): TraceTreeNode[] {
     )
     SELECT t.id, t.parent_id AS parentId, t.name, t.kind, t.started_at AS startedAt,
            t.ended_at AS endedAt, t.status, t.incomplete,
-           t.tool_status AS toolStatus, t.attribution
+           t.tool_status AS toolStatus, t.attribution, t.expired_calls AS expiredCalls
     FROM traces t WHERE t.id IN (SELECT id FROM subtree)`).all(traceId) as any[]
-  if (traces.length === 0) return []
+  if (traces.length === 0) return null
 
   const ids = traces.map((t) => t.id)
   const requests = db.prepare(`
     SELECT r.id, r.trace_id AS traceId, r.seq, r.method, r.normalized_endpoint AS endpoint,
            r.hostname, r.entity_class AS cls, r.model, r.status, r.started_at AS startedAt,
-           r.latency_ms AS latencyMs, r.cost_usd AS costUsd, r.tokens_in AS tokensIn, r.tokens_out AS tokensOut
+           r.latency_ms AS latencyMs, r.cost_usd AS costUsd, r.tokens_in AS tokensIn, r.tokens_out AS tokensOut,
+           r.tokens_cached AS tokensCached, r.tokens_cache_write AS tokensCacheWrite,
+           r.req_bytes AS reqBytes, r.res_bytes AS resBytes
     FROM requests r WHERE r.trace_id IN (${ids.map(() => '?').join(',')})
     ORDER BY r.seq, r.id`).all(...ids) as any[]
 
@@ -440,19 +473,33 @@ export function traceTree(db: StorageDriver, traceId: number): TraceTreeNode[] {
   }
 
   // Roll each trace node up over its own subtree, not just its direct requests.
-  const subtreeStats = (id: number): { calls: number; costUsd: number; priced: number; tin: number; tout: number } => {
+  // tokensCached/tokensCacheWrite track a "known" flag alongside their sum —
+  // the same null-vs-0 distinction §1.3 requires at the leaf (a rollup that
+  // can't tell "nothing reported" from "reported zero" must never imply either).
+  interface Stats {
+    calls: number; costUsd: number; priced: number; tin: number; tout: number; tokenCalls: number
+    tcached: number; tcachedKnown: boolean; tcw: number; tcwKnown: boolean
+  }
+  const subtreeStats = (id: number): Stats => {
     const own = reqsByTrace.get(id) ?? []
-    const acc = {
+    const acc: Stats = {
       calls: own.length,
       costUsd: own.reduce((s, r) => s + (r.costUsd ?? 0), 0),
       priced: own.filter((r) => r.costUsd != null).length,
       tin: own.reduce((s, r) => s + (r.tokensIn ?? 0), 0),
       tout: own.reduce((s, r) => s + (r.tokensOut ?? 0), 0),
+      tokenCalls: own.filter((r) => r.tokensIn != null || r.tokensOut != null).length,
+      tcached: own.reduce((s, r) => s + (r.tokensCached ?? 0), 0),
+      tcachedKnown: own.some((r) => r.tokensCached != null),
+      tcw: own.reduce((s, r) => s + (r.tokensCacheWrite ?? 0), 0),
+      tcwKnown: own.some((r) => r.tokensCacheWrite != null),
     }
     for (const child of traces.filter((t) => t.parentId === id)) {
       const c = subtreeStats(child.id)
       acc.calls += c.calls; acc.costUsd += c.costUsd; acc.priced += c.priced
-      acc.tin += c.tin; acc.tout += c.tout
+      acc.tin += c.tin; acc.tout += c.tout; acc.tokenCalls += c.tokenCalls
+      acc.tcached += c.tcached; acc.tcachedKnown = acc.tcachedKnown || c.tcachedKnown
+      acc.tcw += c.tcw; acc.tcwKnown = acc.tcwKnown || c.tcwKnown
     }
     return acc
   }
@@ -464,13 +511,20 @@ export function traceTree(db: StorageDriver, traceId: number): TraceTreeNode[] {
       type: t.kind === 'tool' ? 'tool' : 'trace', id: t.id, depth,
       label: t.name ?? '(unnamed)',
       startedAt: t.startedAt,
-      durationMs: t.endedAt != null ? t.endedAt - t.startedAt : null,
+      endedAt: t.endedAt,
+      // An observation window forced closed by the sweep is not a duration.
+      durationMs: t.incomplete === 1 ? null : (t.endedAt != null ? t.endedAt - t.startedAt : null),
       status: t.status,
       costUsd: stats.costUsd, pricedCalls: stats.priced,
       tokensIn: stats.tin, tokensOut: stats.tout,
+      tokensCached: stats.tcachedKnown ? stats.tcached : null,
+      tokensCacheWrite: stats.tcwKnown ? stats.tcw : null,
+      tokenCalls: stats.tokenCalls,
+      reqBytes: null, resBytes: null,
       calls: stats.calls,
       llm: false, incomplete: t.incomplete === 1,
-      hostname: null, model: null, requestId: null,
+      hostname: null, model: null, method: null, requestId: null,
+      expiredCalls: t.expiredCalls,
       toolStatus: t.toolStatus ?? null, attribution: t.attribution ?? null,
     })
     // Children of this trace — sub-traces, tool nodes and requests — interleaved
@@ -489,13 +543,20 @@ export function traceTree(db: StorageDriver, traceId: number): TraceTreeNode[] {
         type: 'request', id: r.id, depth: depth + 1,
         label: `${r.method} ${r.endpoint}`,
         startedAt: r.startedAt,
+        // No stored end timestamp on a request row — derived the same way
+        // traceList's synthetic untraced rows already do.
+        endedAt: r.latencyMs != null ? r.startedAt + r.latencyMs : null,
         durationMs: r.latencyMs,
         status: r.status,
         costUsd: r.costUsd, pricedCalls: r.costUsd != null ? 1 : 0,
         tokensIn: r.tokensIn, tokensOut: r.tokensOut,
+        tokensCached: r.tokensCached, tokensCacheWrite: r.tokensCacheWrite,
+        tokenCalls: r.tokensIn != null || r.tokensOut != null ? 1 : 0,
+        reqBytes: r.reqBytes, resBytes: r.resBytes,
         calls: 1,
         llm: r.cls === 'llm', incomplete: false,
-        hostname: r.hostname, model: r.model, requestId: r.id,
+        hostname: r.hostname, model: r.model, method: r.method, requestId: r.id,
+        expiredCalls: 0,
         toolStatus: null, attribution: null,
       })
     }
@@ -503,7 +564,7 @@ export function traceTree(db: StorageDriver, traceId: number): TraceTreeNode[] {
 
   const root = traces.find((t) => t.id === traceId)!
   walk(root, 0)
-  return out
+  return { root: out[0], nodes: out }
 }
 
 /** Which node owns a request: a tool whose window contains it, else the trace it
@@ -524,12 +585,22 @@ function attributeToTool(r: any, traces: any[]): number {
   return inWindow.length === 1 ? inWindow[0].id : r.traceId
 }
 
+/** A tool's raw call/result, written when the tool trace closes and never read
+ *  until a detail pane wants it (spec §5). null iff the tool's trace row (and
+ *  its `tool_io` row along with it) has since been pruned. */
+export function toolIo(db: StorageDriver, traceId: number):
+    { args: string | null; result: string | null; truncated: boolean } | null {
+  const row = db.prepare(`SELECT args, result, truncated FROM tool_io WHERE trace_id = ?`).get(traceId)
+  return row ? { args: row.args ?? null, result: row.result ?? null, truncated: !!row.truncated } : null
+}
+
 export function requestDetail(db: StorageDriver, id: number) {
   const row = db.prepare(`
     SELECT r.id, r.started_at AS startedAt, r.method, r.entity, r.provider,
            r.normalized_endpoint AS normalizedEndpoint, r.status, r.latency_ms AS latencyMs,
            r.model, r.tokens_in AS tokensIn, r.tokens_out AS tokensOut, r.tokens_cached AS tokensCached,
            r.cost_usd AS costUsd, r.first_byte_ms AS firstByteMs,
+           r.req_bytes AS reqBytes, r.res_bytes AS resBytes,
            r.url, r.tags, p.name AS project
     FROM requests r JOIN projects p ON p.id = r.project_id WHERE r.id = ?`).get(id)
   if (!row) return null

@@ -29,7 +29,8 @@ export function TraceView({ db, traceId, columns: forced, onBack, onOpenRequest 
 }) {
   const term = useTermSize()
   const columns = forced ?? term.columns
-  const nodes = usePoll(() => query.traceTree(db, traceId), 1000, [traceId])
+  const treeData = usePoll(() => query.traceTree(db, traceId), 1000, [traceId])
+  const nodes = treeData?.nodes ?? []
   const [cursor, setCursor] = useState(0)
   const at = Math.min(cursor, Math.max(0, nodes.length - 1))
   const twoPane = columns >= TWO_PANE_MIN_COLUMNS

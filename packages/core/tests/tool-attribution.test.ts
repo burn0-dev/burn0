@@ -120,7 +120,7 @@ describe('tool calls', () => {
       ],
       resultAt: T0 + 500,
     })
-    const nodes = traceTree(db, rootId)
+    const { nodes } = traceTree(db, rootId)!
     const tool = nodes.find((n) => n.type === 'tool')!
     expect(tool.label).toBe('search_orders')
     // "search_orders costs X every time it runs" needs these two beneath it —
@@ -138,7 +138,7 @@ describe('tool calls', () => {
       inner: [{ offsetMs: 40, host: 'api.pinecone.io', endpoint: '/query' }],
       resultAt: T0 + 500,
     })
-    const nodes = traceTree(db, rootId)
+    const { nodes } = traceTree(db, rootId)!
     const tools = nodes.filter((n) => n.type === 'tool')
     expect(tools.map((t) => t.label).sort()).toEqual(['get_weather', 'search_orders'])
     expect(tools.every((t) => t.attribution === 'turn')).toBe(true)
@@ -149,7 +149,7 @@ describe('tool calls', () => {
 
   it('shows a tool that did only local work as a leaf, not as an error', () => {
     const rootId = runTurn({ tools: [{ id: 'call_a', name: 'add_numbers' }], resultAt: T0 + 500 })
-    const nodes = traceTree(db, rootId)
+    const { nodes } = traceTree(db, rootId)!
     const tool = nodes.find((n) => n.type === 'tool')!
     expect(tool.calls).toBe(0)
     expect(tool.toolStatus).toBe('ok')
@@ -172,7 +172,7 @@ describe('tool calls', () => {
         'https://api.late.com/x', '/x', 'api.late.com', 200, T0 + 4000, 5)
     expect(w).toBeDefined()
 
-    const nodes = traceTree(db, rootId)
+    const { nodes } = traceTree(db, rootId)!
     const tool = nodes.find((n) => n.type === 'tool')!
     const late = nodes.find((n) => n.hostname === 'api.late.com')!
     expect(late.depth).toBe(tool.depth)     // sibling of the tool, not a child

@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, ensureProject, insertRun, createWriter, type StorageDriver } from '../src/storage/db.js'
-import { traceList, traceTree } from '../src/query/index.js'
+import { traceList, traceTree, toolIo } from '../src/query/index.js'
 import type { PendingTrace } from '../src/context/trace.js'
 import { fakeRow } from './storage.test.js'
 
@@ -166,7 +166,7 @@ describe('traceTree', () => {
     ])
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
 
-    const nodes = traceTree(db, rootId)
+    const { nodes } = traceTree(db, rootId)!
     expect(nodes.map((n) => [n.depth, n.type, n.label])).toEqual([
       [0, 'trace', 'POST /api/chat'],
       [1, 'trace', 'retrieve-context'],
@@ -196,7 +196,7 @@ describe('traceTree', () => {
       llm({ startedAt: T0 + 20, trace: { localId: 1, seq: 1 }, costUsd: 0.02 }),
     ])
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
-    const nodes = traceTree(db, rootId)
+    const { nodes } = traceTree(db, rootId)!
     expect(nodes[0].costUsd).toBeCloseTo(0.03, 6)   // root: both calls
     expect(nodes[1].costUsd).toBeCloseTo(0.01, 6)   // child: only its own
     expect(nodes[0].calls).toBe(2)
@@ -207,12 +207,92 @@ describe('traceTree', () => {
     // retention prunes requests by started_at, so a trace can outlive its calls
     writer().write({ opened: [trace({ localId: 1, name: 'old' })], closed: [] }, [])
     const rootId = db.prepare(`SELECT id FROM traces`).get().id
-    const nodes = traceTree(db, rootId)
+    const { nodes } = traceTree(db, rootId)!
     expect(nodes).toHaveLength(1)
     expect(nodes[0].calls).toBe(0)
   })
 
-  it('returns nothing for an unknown id instead of throwing', () => {
-    expect(traceTree(db, 99999)).toEqual([])
+  it('returns null for an unknown id instead of throwing', () => {
+    expect(traceTree(db, 99999)).toBeNull()
+  })
+
+  it('traceTree returns null for a pruned trace, root+nodes otherwise', () => {
+    expect(traceTree(db, 999999)).toBeNull()
+
+    const w = writer()
+    w.write({
+      opened: [trace({ localId: 1, name: 'POST /api/chat', startedAt: T0 })],
+      closed: [trace({ localId: 1, name: 'POST /api/chat', startedAt: T0, endedAt: T0 + 100, status: 200 })],
+    }, [llm({ startedAt: T0 + 10, trace: { localId: 1, seq: 0 } })])
+    const seededTraceId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
+
+    const t = traceTree(db, seededTraceId)!
+    expect(t.root.type).toBe('trace')
+    expect(t.nodes[0]).toBe(t.root)
+  })
+
+  it('nodes carry cache fields, method, tokenCalls; incomplete kills durationMs', () => {
+    const seed = writer()
+    seed.write({
+      opened: [trace({ localId: 1, name: 'POST /api/chat', startedAt: T0 })],
+      closed: [trace({ localId: 1, name: 'POST /api/chat', startedAt: T0, endedAt: T0 + 500, status: 200 })],
+    }, [llm({ startedAt: T0 + 10, trace: { localId: 1, seq: 0 }, tokensCached: 46800 })])
+    const seededTraceId = db.prepare(`SELECT id FROM traces WHERE name = 'POST /api/chat'`).get().id
+
+    const t = traceTree(db, seededTraceId)!
+    const llmNode = t.nodes.find((n) => n.model != null)!
+    expect(llmNode.tokensCached).toBe(46800)
+    expect(llmNode.method).toBe('POST')
+    expect(t.root.tokenCalls).toBeGreaterThan(0)
+
+    const streamW = writer()
+    streamW.write({ opened: [trace({ localId: 1, name: 'POST /stream' })], closed: [] },
+      [llm({ startedAt: T0, trace: { localId: 1, seq: 0 } })])
+    streamW.write({ opened: [], closed: [trace({ localId: 1, endedAt: T0 + 5000, incomplete: true })] }, [])
+    const incompleteTraceId = db.prepare(`SELECT id FROM traces WHERE name = 'POST /stream'`).get().id
+
+    const swept = traceTree(db, incompleteTraceId)!
+    expect(swept.root.durationMs).toBeNull()
+  })
+
+  it('aggregates tokensCached/tokensCacheWrite as null when nothing in the subtree reports them, summed when some do', () => {
+    const none = writer()
+    none.write({ opened: [trace({ localId: 1, name: 'no-cache-info' })], closed: [] },
+      [llm({ startedAt: T0 + 10, trace: { localId: 1, seq: 0 } })])
+    const noneId = db.prepare(`SELECT id FROM traces WHERE name = 'no-cache-info'`).get().id
+    const noneTree = traceTree(db, noneId)!
+    expect(noneTree.root.tokensCached).toBeNull()
+    expect(noneTree.root.tokensCacheWrite).toBeNull()
+
+    const some = writer()
+    some.write({
+      opened: [
+        trace({ localId: 1, name: 'mixed-cache-info' }),
+        trace({ localId: 2, parentLocalId: 1, name: 'child', kind: 'explicit' }),
+      ],
+      closed: [],
+    }, [
+      llm({ startedAt: T0 + 10, trace: { localId: 2, seq: 0 }, tokensCached: 500, tokensCacheWrite: 200 }),
+      llm({ startedAt: T0 + 20, trace: { localId: 1, seq: 1 } }),  // unknown cache info
+    ])
+    const someId = db.prepare(`SELECT id FROM traces WHERE name = 'mixed-cache-info'`).get().id
+    const someTree = traceTree(db, someId)!
+    expect(someTree.root.tokensCached).toBe(500)
+    expect(someTree.root.tokensCacheWrite).toBe(200)
+  })
+})
+
+describe('toolIo', () => {
+  it('toolIo round-trips args/result and returns null when pruned', () => {
+    const w = writer()
+    w.write({ opened: [trace({ localId: 1, name: 'lookup', kind: 'tool', args: '{"q":1}' })], closed: [] }, [])
+    w.write({
+      opened: [],
+      closed: [trace({ localId: 1, name: 'lookup', kind: 'tool', args: '{"q":1}', result: '{"ok":true}' })],
+    }, [])
+    const toolTraceId = db.prepare(`SELECT id FROM traces WHERE kind = 'tool'`).get().id
+
+    expect(toolIo(db, toolTraceId)).toEqual({ args: '{"q":1}', result: '{"ok":true}', truncated: false })
+    expect(toolIo(db, 424242)).toBeNull()
   })
 })
