@@ -88,7 +88,7 @@ describe('UsageScreen', () => {
     const { lastFrame } = render(<UsageScreen db={db} />)
     await tick()
     const f = lastFrame()!
-    expect(f).toContain('1,204')   // tokens, not the 900/2400 byte figures
+    expect(f).toContain('1.2k')   // tokens, not the 900/2400 byte figures
     expect(f).toContain('380')
     expect(f).toContain('$0.0142')
   })

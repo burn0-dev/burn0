@@ -7,7 +7,10 @@ export interface TraceRow {
   id: number; startedAt: number; method: string; entity: string; hostname: string; provider: string | null
   normalizedEndpoint: string; status: number | null; latencyMs: number | null
   reqBytes: number | null; resBytes: number | null
-  model: string | null; tokensIn: number | null; tokensOut: number | null; costUsd: number | null
+  model: string | null; tokensIn: number | null; tokensOut: number | null
+  /** null iff this request never reported cache info — distinct from "0 cached" (spec §1.3). */
+  tokensCached: number | null
+  costUsd: number | null
   project: string
 }
 
@@ -15,7 +18,8 @@ const TRACE_SELECT = `
   SELECT r.id, r.started_at AS startedAt, r.method, r.entity, r.hostname, r.provider,
          r.normalized_endpoint AS normalizedEndpoint, r.status, r.latency_ms AS latencyMs,
          r.req_bytes AS reqBytes, r.res_bytes AS resBytes,
-         r.model, r.tokens_in AS tokensIn, r.tokens_out AS tokensOut, r.cost_usd AS costUsd,
+         r.model, r.tokens_in AS tokensIn, r.tokens_out AS tokensOut, r.tokens_cached AS tokensCached,
+         r.cost_usd AS costUsd,
          p.name AS project
   FROM requests r JOIN projects p ON p.id = r.project_id`
 
@@ -106,6 +110,10 @@ export interface UsageRow {
   bytesOutKnown: number
   tokensIn: number
   tokensOut: number
+  /** Sum of cache-read tokens. null iff none of the group's calls reported cache
+   *  info — distinct from "0 cached", which the UI's `↺` glyph must never imply
+   *  for an unknown value (spec §1.3). */
+  tokensCached: number | null
   /** Calls that reported token usage. 0 means the provider returned no usage block. */
   tokenCalls: number
   costUsd: number
@@ -132,6 +140,7 @@ export function usageRows(
             COALESCE(SUM(CASE WHEN req_bytes IS NOT NULL THEN 1 ELSE 0 END),0) bytesInKnown,
             COALESCE(SUM(CASE WHEN res_bytes IS NOT NULL THEN 1 ELSE 0 END),0) bytesOutKnown,
             COALESCE(SUM(tokens_in),0) tokensIn, COALESCE(SUM(tokens_out),0) tokensOut,
+            SUM(tokens_cached) tokensCached,
             COALESCE(SUM(CASE WHEN tokens_in IS NOT NULL OR tokens_out IS NOT NULL THEN 1 ELSE 0 END),0) tokenCalls,
             COALESCE(SUM(cost_usd),0) costUsd,
             COALESCE(SUM(CASE WHEN cost_usd IS NOT NULL THEN 1 ELSE 0 END),0) pricedCalls,
@@ -154,13 +163,18 @@ export interface UsageNode {
   bytesOutKnown: number
   tokensIn: number
   tokensOut: number
+  /** Sum of cache-read tokens over the subtree. null iff nothing under this node
+   *  ever reported cache info — see `UsageRow.tokensCached` (spec §1.3). */
+  tokensCached: number | null
   tokenCalls: number
   costUsd: number
   pricedCalls: number
   children: UsageNode[]
 }
 
-/** Numeric fields rolled up from leaf rows to every ancestor. */
+/** Numeric fields rolled up from leaf rows to every ancestor. `tokensCached` is
+ *  rolled up separately (see below) since a plain `+=` can't tell "0" from
+ *  "unreported" the way this list's fields can. */
 const ROLLUP = [
   'calls', 'errors', 'bytesIn', 'bytesOut', 'bytesInKnown', 'bytesOutKnown',
   'tokensIn', 'tokensOut', 'tokenCalls', 'costUsd', 'pricedCalls',
@@ -170,7 +184,7 @@ function node(key: string, label: string, kind: UsageNode['kind']): UsageNode {
   return {
     key, label, kind, llm: false,
     calls: 0, errors: 0, bytesIn: 0, bytesOut: 0, bytesInKnown: 0, bytesOutKnown: 0,
-    tokensIn: 0, tokensOut: 0, tokenCalls: 0, costUsd: 0, pricedCalls: 0, children: [],
+    tokensIn: 0, tokensOut: 0, tokensCached: null, tokenCalls: 0, costUsd: 0, pricedCalls: 0, children: [],
   }
 }
 
@@ -195,6 +209,7 @@ export function usageTree(
     const ep = child(host, `${host.key}/e:${r.method} ${r.endpoint}`, `${r.method} ${r.endpoint}`, 'endpoint')
     for (const n of [v, s, host, ep]) {
       for (const f of ROLLUP) n[f] += r[f]
+      if (r.tokensCached != null) n.tokensCached = (n.tokensCached ?? 0) + r.tokensCached
       if (h.entityClass === 'llm') n.llm = true
     }
   }

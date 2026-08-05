@@ -4,7 +4,7 @@ import { query, type Scope, type StorageDriver, type TraceRow } from '@burn0/cor
 import { useTermSize } from '../hooks.js'
 import { theme, statusColor, latencyColor } from '../theme.js'
 import { TableHeader, TableRow, colWidths, type ColDef } from '../ui.js'
-import { fmtUsd, fmtNum, fmtMs, fmtTime, fmtBytes } from '../../format.js'
+import { fmtUsd, fmtMs, fmtTime, fmtBytes, fmtTokPair } from '../../format.js'
 
 /** One unified chronological stream of every request — the only screen where LLM
  *  and API calls appear interleaved, which is the whole §2.6 thesis. */
@@ -165,7 +165,7 @@ function cells(r: TraceRow) {
  *  when the provider reported nothing and when the capture path never measured. */
 function volume(r: TraceRow): string {
   if (r.tokensIn != null || r.tokensOut != null) {
-    return `${fmtNum(r.tokensIn ?? 0)}→${fmtNum(r.tokensOut ?? 0)}`
+    return fmtTokPair(r.tokensIn, r.tokensCached, r.tokensOut)
   }
   return r.resBytes == null ? '—' : fmtBytes(r.resBytes)
 }

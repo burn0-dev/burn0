@@ -5,7 +5,7 @@ import type { UsageNode } from '@burn0/core'
 import { usePoll, useTermSize } from '../hooks.js'
 import { theme } from '../theme.js'
 import { TableHeader, TableRow, colWidths, type ColDef } from '../ui.js'
-import { fmtUsd, fmtNum, fmtBytes } from '../../format.js'
+import { fmtUsd, fmtNum, fmtBytes, fmtTok, CACHE_MARK } from '../../format.js'
 
 const COLS: ColDef[] = [
   { label: 'Vendor / service / endpoint', grow: true, width: 24 },
@@ -106,7 +106,11 @@ function cells(r: Row) {
  *  unreported — a provider that sent no usage block, or the undici capture path
  *  that never sees bodies — and unreported renders as a gap, not as 0. */
 function volume(n: UsageNode, dir: 'in' | 'out'): string {
-  if (n.llm) return n.tokenCalls > 0 ? fmtNum(dir === 'in' ? n.tokensIn : n.tokensOut) : '—'
+  if (n.llm) {
+    if (n.tokenCalls === 0) return '—'
+    if (dir === 'out') return fmtTok(n.tokensOut)
+    return fmtTok(n.tokensIn) + ((n.tokensCached ?? 0) > 0 ? CACHE_MARK : '')
+  }
   const known = dir === 'in' ? n.bytesInKnown : n.bytesOutKnown
   return fmtBytes(known > 0 ? (dir === 'in' ? n.bytesIn : n.bytesOut) : null)
 }

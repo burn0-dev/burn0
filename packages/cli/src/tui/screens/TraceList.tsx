@@ -5,7 +5,7 @@ import type { TraceListRow } from '@burn0/core'
 import { usePoll, useTermSize } from '../hooks.js'
 import { theme, statusColor, latencyColor } from '../theme.js'
 import { TableHeader, TableRow, colWidths, type ColDef } from '../ui.js'
-import { fmtUsd, fmtNum, fmtMs, fmtTime } from '../../format.js'
+import { fmtUsd, fmtNum, fmtMs, fmtTime, fmtTokPair } from '../../format.js'
 import { TracesScreen } from './Traces.js'
 import { TraceView } from './TraceView.js'
 
@@ -97,7 +97,7 @@ function cells(r: TraceListRow) {
     // pricedCalls 0 means nothing in this trace resolved to a price
     { text: r.pricedCalls > 0 ? fmtUsd(r.costUsd) : '—', color: theme.cost },
     { text: fmtNum(r.calls) },
-    { text: r.tokenCalls > 0 ? `${fmtNum(r.tokensIn)} → ${fmtNum(r.tokensOut)}` : '—', dim: true },
+    { text: r.tokenCalls > 0 ? fmtTokPair(r.tokensIn, r.tokensCached, r.tokensOut, true) : '—', dim: true },
     { text: fmtMs(r.durationMs), color: latencyColor(r.durationMs) },
     // ◆ LLM, ◇ API — retrieve-then-answer reads as ◆◇◆◇; a long ◆◆◆◆◆ is a loop
     { text: r.steps, dim: true },
