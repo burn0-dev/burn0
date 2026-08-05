@@ -14,11 +14,26 @@ let upstreamPort: number
 let appPort: number
 let handle: Burn0Handle
 
+/** Anthropic streaming: a declared tool call (content_block_start +
+ *  input_json_delta) plus usage split across message_start (input +
+ *  cache_read + cache_creation) and message_delta (output). */
+const ANTHROPIC_TOOL_SSE = [
+  'data: {"type":"message_start","message":{"usage":{"input_tokens":30,"cache_read_input_tokens":200,"cache_creation_input_tokens":45}}}\n\n',
+  'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_e2e_01","name":"search_orders","input":{}}}\n\n',
+  'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"customer\\":\\"acme\\"}"}}\n\n',
+  'data: {"type":"content_block_stop","index":0}\n\n',
+  'data: {"type":"message_delta","usage":{"output_tokens":12}}\n\n',
+  'data: {"type":"message_stop"}\n\n',
+].join('')
+
 beforeAll(async () => {
   upstream = createServer((req, res) => {
     if (req.url === '/v1/chat/completions') {
       res.setHeader('content-type', 'application/json')
       res.end('{"model":"gpt-4o","usage":{"prompt_tokens":1204,"completion_tokens":380}}')
+    } else if (req.url === '/v1/messages') {
+      res.setHeader('content-type', 'text/event-stream')
+      res.end(ANTHROPIC_TOOL_SSE)
     } else {
       res.end('{"ok":true}')
     }
@@ -44,6 +59,10 @@ beforeAll(async () => {
         await fetch(`http://127.0.0.1:${upstreamPort}/v1/chat/completions`, { method: 'POST', body: '{}' })
           .then((r) => r.text())
       })
+    } else if (req.url === '/api/agent') {
+      await fetch(`http://127.0.0.1:${upstreamPort}/v1/messages`, {
+        method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5' }),
+      }).then((r) => r.text())
     }
     res.end('done')
   })
@@ -105,5 +124,28 @@ describe('auto-rooted traces, end to end', () => {
     const seqs = handle.db.prepare(
       `SELECT seq FROM requests WHERE trace_id IN (?, ?) ORDER BY seq`).all(children[0].id, children[1].id)
     expect(seqs.map((s: any) => s.seq)).toEqual([0, 1])
+  })
+
+  it('a streaming Anthropic tool call produces a 🔧 tool trace and normalized cache tokens', async () => {
+    await fetch(`http://127.0.0.1:${appPort}/api/agent`).then((r) => r.text())
+    await settle()
+    handle.queue.flushNow()
+
+    const root = handle.db.prepare(
+      `SELECT * FROM traces WHERE name LIKE '%/api/agent' AND kind = 'http-server'`).get()
+    expect(root).toBeDefined()
+
+    const tool = handle.db.prepare(`SELECT * FROM traces WHERE kind = 'tool'`).get()
+    expect(tool).toBeDefined()
+    expect(tool.name).toBe('search_orders')
+    expect(tool.parent_id).toBe(root.id)
+
+    const req = handle.db.prepare(
+      `SELECT tokens_in, tokens_cached, tokens_cache_write FROM requests WHERE url LIKE '%/v1/messages'`).get()
+    expect(req).toBeDefined()
+    // Anthropic input excludes cache — normalized tokens_in = input + cache_read + cache_creation.
+    expect(req.tokens_in).toBe(30 + 200 + 45)
+    expect(req.tokens_cached).toBe(200)
+    expect(req.tokens_cache_write).toBe(45)
   })
 })

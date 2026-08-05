@@ -247,3 +247,59 @@ describe('Hono on Bun — the target shape, end to end', () => {
     expect(steps[2].tokens_out).toBe(50)
   })
 })
+
+describe('Anthropic SSE tool call + cache usage — cross-runtime parity (bun:sqlite)', () => {
+  it('records the 🔧 tool trace and normalized cache tokens, identical to the Node path', async () => {
+    // Same fixture shape as packages/core/tests/trace-e2e.test.ts: a declared
+    // tool call (content_block_start + input_json_delta) plus usage split
+    // across message_start (input + cache_read + cache_creation) and
+    // message_delta (output).
+    const sseFrames = [
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":30,"cache_read_input_tokens":200,"cache_creation_input_tokens":45}}}\n\n',
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_bun_01","name":"search_orders","input":{}}}\n\n',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"customer\\":\\"acme\\"}"}}\n\n',
+      'data: {"type":"content_block_stop","index":0}\n\n',
+      'data: {"type":"message_delta","usage":{"output_tokens":12}}\n\n',
+      'data: {"type":"message_stop"}\n\n',
+    ]
+    const llm = track(Bun.serve({
+      port: 0,
+      fetch: () => new Response(new ReadableStream({
+        start(c) {
+          for (const f of sseFrames) c.enqueue(new TextEncoder().encode(f))
+          c.close()
+        },
+      }), { headers: { 'content-type': 'text/event-stream' } }),
+    }))
+    const h = freshInit()
+    const app = track(Bun.serve({
+      port: 0,
+      fetch: async () => {
+        await (await fetch(`http://127.0.0.1:${llm.port}/v1/messages`, {
+          method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5' }),
+        })).text()
+        return new Response('ok')
+      },
+    }))
+
+    await (await fetch(`http://127.0.0.1:${app.port}/api/agent`)).text()
+    await settle(h)
+
+    const root = h.db.prepare(`SELECT * FROM traces WHERE kind = 'http-server'`).get()
+    expect(root).toBeDefined()
+    expect(root.name).toBe('GET /api/agent')
+
+    const tool = h.db.prepare(`SELECT * FROM traces WHERE kind = 'tool'`).get()
+    expect(tool).toBeDefined()
+    expect(tool.name).toBe('search_orders')
+    expect(tool.parent_id).toBe(root.id)
+
+    const req = h.db.prepare(
+      `SELECT tokens_in, tokens_cached, tokens_cache_write FROM requests WHERE url LIKE '%/v1/messages'`).get()
+    expect(req).toBeDefined()
+    // Anthropic input excludes cache — normalized tokens_in = input + cache_read + cache_creation.
+    expect(req.tokens_in).toBe(30 + 200 + 45)
+    expect(req.tokens_cached).toBe(200)
+    expect(req.tokens_cache_write).toBe(45)   // the assertion that matters most: bun:sqlite writes it too
+  })
+})
