@@ -15,10 +15,14 @@ import { DebugScreen } from './screens/Debug.js'
 
 export const TABS = ['Overview', 'Usage', 'LLM', 'API', 'Logs'] as const
 
-// Per-tab defaults, shown until (if ever) the active screen claims the line
-// itself via `useFooter` — see `footer.ts`. TraceList/TraceView (tab 2) own
-// theirs for their two list-view states; this entry is the fallback for its
-// other states (flat sub-view, mid-trace) and everything tabs 0/1/3/4 do.
+// Per-tab defaults — the fallback until (or unless) the active screen claims
+// the line itself via `useFooter` (see `footer.ts`). Tabs 0/1/3/4 never
+// claim, so their entries here ARE the permanent footer for those tabs. Tab 2
+// (TraceList/TraceView) claims the line in every one of its own sub-states
+// (list, flat sub-view, mid-trace) — entry 2 here only ever paints on the
+// single pre-effect frame before that screen's first claim lands (review
+// round 1: an earlier version of this comment overstated how much of tab 2's
+// footer this entry actually covers in steady state — it's effectively none).
 const FOOTERS: Record<number, string> = {
   0: `${NAV} · ↓ window`,
   1: `${NAV} · ↑↓ move · h/l/enter expand`,

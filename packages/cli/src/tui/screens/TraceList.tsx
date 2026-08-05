@@ -57,14 +57,27 @@ export function TraceListScreen({ db, scope, onOpenRequest }: {
     }
   })
 
-  // Own the footer only for this screen's own table: `⏎ open` for an
-  // untraced row (it goes straight to the payload, spec §4), `⏎ open trace`
-  // otherwise. Deferred (`false`) once a trace is open or the flat sub-view
-  // is showing — those own their own line (TraceView) or fall back to this
-  // tab's App-level default (TracesScreen, reused from the API tab).
+  // This screen owns the footer for every one of its own sub-states.
+  // Deferred (`false`) ONLY when a trace is open — TraceView is mounted then
+  // and claims the line itself (child-before-parent effect ordering means
+  // its claim would win anyway, but `false` also means THIS component never
+  // even tries, so there is no stale text sitting around from before the
+  // trace opened).
+  //
+  // review round 1, Finding 2: the flat sub-view (TracesScreen, per-call rows)
+  // used to fall through to `false` here too, on the theory that it would
+  // pick up the plain trace-list text as a "reasonable enough" default. It
+  // doesn't — `useFooter(false)` only skips SETTING, it never releases a
+  // previous claim, and this component never unmounts when `flat` flips (it
+  // is the same instance, just choosing what to render), so the stale
+  // "⏎ open trace · f flat" from the list view stayed up verbatim while ⏎
+  // actually opened a request payload and `f` returned to the trace list —
+  // both keys the visible footer described wrongly. The flat sub-view must
+  // claim its own accurate string, not borrow the list's.
   const here = rows[at]
-  const footerText = `${NAV} · ↑↓ select · ${here && here.id == null ? '⏎ open' : '⏎ open trace'} · f flat`
-  useFooter(openTrace != null || flat ? false : footerText)
+  const listFooter = `${NAV} · ↑↓ select · ${here && here.id == null ? '⏎ open' : '⏎ open trace'} · f flat`
+  const flatFooter = `${NAV} · ↑↓ select · ⏎ open request · f trace list`
+  useFooter(openTrace != null ? false : flat ? flatFooter : listFooter)
 
   if (openTrace != null) {
     return (

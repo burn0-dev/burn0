@@ -810,6 +810,17 @@ function commonPrefix(paths: string[]): string {
 }
 
 function infoCard(row: DisplayRow, inner: number): Line[] {
+  // The waiting row (live root, zero calls yet) is a DIFFERENT epistemic
+  // state from the expired-calls row below — nothing has been lost, nothing
+  // has even happened yet — so it needs its own card, not this one's "gone"
+  // wording (review round 1, Finding 1: rendering that on a live empty root
+  // is exactly the false data-loss claim spec §4 forbids).
+  if (row.key === 'info:waiting') {
+    return [
+      titleLine('waiting for first call…', undefined, inner),
+      L(clip('the trace is open; outbound calls will appear here as they complete', inner), { dim: true }),
+    ]
+  }
   return [
     titleLine('expired calls', theme.warn, inner),
     L(clip(row.step.trim().replace(/^·\s*/, ''), inner), { dim: true }),

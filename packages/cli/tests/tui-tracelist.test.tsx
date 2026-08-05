@@ -8,12 +8,24 @@ import { openDatabase, ensureProject, insertRun, createWriter, type StorageDrive
 import type { PendingTrace, EnrichedRow } from '@burn0/core'
 import { TraceListScreen } from '../src/tui/screens/TraceList.js'
 import { TraceView } from '../src/tui/screens/TraceView.js'
+import { FooterContext } from '../src/tui/footer.js'
 import { baseRow } from './helpers/seed.js'
 
 const tick = (ms = 25) => new Promise((r) => setTimeout(r, ms))
 const DOWN = '\u001B[B'
 const ESC = '\u001B'
 const T0 = 1_700_000_000_000
+
+/** `useFooter` (footer.ts) only does anything through the `FooterContext`
+ *  provider App normally supplies — read back whatever the screen last
+ *  claimed, synchronously (the setter itself, not React state). */
+function footerCapture(): { footer: () => string | null; Provider: React.FC<{ children: React.ReactNode }> } {
+  let text: string | null = null
+  const Provider: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+    <FooterContext.Provider value={(t) => { text = t }}>{children}</FooterContext.Provider>
+  )
+  return { footer: () => text, Provider }
+}
 
 function trace(over: Partial<PendingTrace> & { localId: number }): PendingTrace {
   return {
@@ -105,6 +117,27 @@ describe('TraceListScreen', () => {
     // trace name does not
     expect(lastFrame()).toContain('text-embedding-3')
     expect(lastFrame()).not.toContain('POST /api/chat')
+  })
+
+  it('the flat sub-view claims its own accurate footer, not the trace-list one (review round 1, Finding 2)', async () => {
+    const { db } = seeded()
+    const { footer, Provider } = footerCapture()
+    const { stdin } = render(<Provider><TraceListScreen db={db} onOpenRequest={noop} /></Provider>)
+    await tick()
+    // Before toggling: the trace-list's own footer, "⏎ open trace" — correct
+    // here, since ⏎ on this table opens a trace, not a request payload.
+    expect(footer()).toContain('⏎ open trace')
+
+    stdin.write('f')
+    await tick()
+    // Flat mode renders TracesScreen (per-call rows): ⏎ opens a REQUEST's
+    // payload directly and `f` returns to the trace list — the stale
+    // "⏎ open trace · f flat" text (accurate for the OTHER view) must be gone.
+    const f = footer()
+    expect(f).not.toContain('⏎ open trace')
+    expect(f).not.toContain('f flat')
+    expect(f).toContain('open request')
+    expect(f).toContain('f trace list')
   })
 
   it('never renders an unpriced trace as $0.00', async () => {

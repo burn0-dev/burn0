@@ -484,11 +484,21 @@ describe('TraceView (tree-model)', () => {
     }, [])
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
 
-    const { lastFrame } = render(
+    const { lastFrame, stdin } = render(
       <TraceView db={db} traceId={rootId} columns={140} now={T0 + 1000} onBack={noop} />)
     await tick()
     expect(lastFrame()).toContain('waiting for first call')
     expect(lastFrame()).not.toContain('expired')
+
+    // Review round 1, Finding 1: the detail card for the waiting info row was
+    // hardcoded to the expired-calls story — selecting it (⏎/↓ onto it) must
+    // NOT render "expired calls" / "metadata for these calls is gone", the
+    // exact false data-loss claim spec §4 forbids on a live, empty root.
+    stdin.write(DOWN); await tick()   // root -> the waiting info row
+    const f = lastFrame()!
+    expect(f).toContain('waiting for first call')
+    expect(f).not.toContain('expired')
+    expect(f).not.toContain('metadata for these calls is gone')
   })
 
   it('an incomplete root shows ⚠ incomplete and TOOK —, warn-colored', async () => {
