@@ -23,6 +23,21 @@ const FOOTER_TREE = 'q quit · tab/←→ screens · ↑↓ move · h/l fold · 
 const FOOTER_FLAT = 'q quit · tab/←→ screens · ↑↓ move · h/l fold · ⏎ open · f tree · esc back'
 const FOOTER_PRUNED = 'q quit · esc back'
 
+/** Pane math, pulled out pure so both the component and a regression test can
+ *  pin it: two-pane's `pane` is 0.62 of `columns` (capped 98); single-pane
+ *  gives the tree pane the whole row bar a 1-column margin — spec §2.5's own
+ *  worked numbers are 140 cols → STEP 53 (two-pane) and `columns - 34`
+ *  (single-pane), the latter only reachable with margin 1, not 2. */
+export function computeLayout(columns: number): {
+  twoPane: boolean; paneWidth: number; detailWidth: number; stepWidth: number
+} {
+  const twoPane = columns >= TWO_PANE_MIN_COLUMNS
+  const paneWidth = twoPane ? Math.min(Math.floor(columns * 0.62), 98) : columns - 1
+  const detailWidth = columns - paneWidth - 2
+  const stepWidth = Math.max(1, paneWidth - (COST_W + TOKENS_W + TOOK_W + 6))
+  return { twoPane, paneWidth, detailWidth, stepWidth }
+}
+
 export function TraceView({ db, traceId, columns: forced, onBack, onOpenRequest }: {
   db: StorageDriver
   traceId: number
@@ -41,36 +56,55 @@ export function TraceView({ db, traceId, columns: forced, onBack, onOpenRequest 
   const [flat, setFlat] = useState(false)
   const [cursorKey, setCursorKey] = useState<string | null>(null)
 
-  const twoPane = columns >= TWO_PANE_MIN_COLUMNS
-  const paneWidth = twoPane ? Math.min(Math.floor(columns * 0.62), 98) : columns - 2
-  const detailWidth = columns - paneWidth - 2
-  const stepWidth = Math.max(1, paneWidth - (COST_W + TOKENS_W + TOOK_W + 6))
+  const { twoPane, paneWidth, detailWidth, stepWidth } = computeLayout(columns)
 
   const rows = useMemo(
     () => (tree ? buildRows({ tree, expanded, collapsed, stepWidth, flat }) : []),
     [tree, expanded, collapsed, stepWidth, flat],
   )
 
-  // Cursor resolution: identity first. A row that disappeared (a fold closed
-  // over it, the poll's window rebuilt the tree) falls back to its previous
-  // position — and if that position was the last row, follows the new last
-  // row, so watching a live trace behaves like `tail -f` rather than freezing
-  // on whatever used to be there.
-  const prevRef = useRef<{ rows: DisplayRow[]; index: number }>({ rows: [], index: -1 })
+  // Cursor resolution, run whenever `rows` itself changes (a poll rebuilding
+  // the tree, or the user's own h/l/f changing what's visible) — precedence
+  // matters:
+  //   1. was the cursor on the LAST row before this change? Follow to the new
+  //      last row, unconditionally. This must outrank identity: the row the
+  //      cursor was on may still exist (just no longer last), and a live
+  //      trace should keep tailing it regardless.
+  //   2. otherwise, does the same key still exist? Keep it.
+  //   3. otherwise, clamp to the nearest valid index.
+  // `prevIndexRef`/`prevRowsRef` are NOT only updated here — see the tracking
+  // effect below, which is what keeps "previous position" honest across pure
+  // cursor moves (arrow keys) that never touch `rows` at all.
+  const prevRowsRef = useRef<DisplayRow[]>([])
+  const prevIndexRef = useRef<number>(-1)
   useEffect(() => {
-    const { rows: prevRows, index: prevIndex } = prevRef.current
-    let idx = cursorKey == null ? -1 : rows.findIndex((r) => r.key === cursorKey)
-    if (idx === -1) {
-      if (rows.length === 0) idx = -1
-      else if (prevRows.length === 0) idx = 0
-      else if (prevIndex === prevRows.length - 1) idx = rows.length - 1
-      else idx = Math.min(Math.max(prevIndex, 0), rows.length - 1)
+    const prevRows = prevRowsRef.current
+    const prevIndex = prevIndexRef.current
+    let idx: number
+    if (rows.length === 0) {
+      idx = -1
+    } else if (prevRows.length === 0) {
+      idx = 0
+    } else if (prevIndex === prevRows.length - 1) {
+      idx = rows.length - 1                                     // was last -> follow
+    } else {
+      const found = cursorKey == null ? -1 : rows.findIndex((r) => r.key === cursorKey)
+      idx = found !== -1 ? found : Math.min(Math.max(prevIndex, 0), rows.length - 1)
     }
     const newKey = idx >= 0 ? rows[idx].key : null
     if (newKey !== cursorKey) setCursorKey(newKey)
-    prevRef.current = { rows, index: idx }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows])
+
+  // Keep a live snapshot of "where the cursor is right now" after every
+  // render — not only after a `rows` change — so the effect above always
+  // resolves against the freshest position. Declared after the resolution
+  // effect so, within one commit, resolution reads last render's snapshot
+  // before this one overwrites it with the current render's.
+  useEffect(() => {
+    prevRowsRef.current = rows
+    prevIndexRef.current = rows.length > 0 ? rows.findIndex((r) => r.key === cursorKey) : -1
+  })
 
   const at = Math.max(0, rows.findIndex((r) => r.key === cursorKey))
   const maxRows = Math.max(3, term.rows - 10)
@@ -111,13 +145,13 @@ export function TraceView({ db, traceId, columns: forced, onBack, onOpenRequest 
     if (key.return) {
       if (row.requestId != null) { onOpenRequest(row.requestId); return }
       if (row.isBranch) {
-        if (isRowExpanded(rows, at, nodes)) closeRow(row.key)
+        if (isBranchOpen(row, rows, at, nodes, expanded, collapsed)) closeRow(row.key)
         else openRow(row.key)
       }
       return
     }
     if (input === 'h') {
-      if (row.isBranch && isRowExpanded(rows, at, nodes)) {
+      if (row.isBranch && isBranchOpen(row, rows, at, nodes, expanded, collapsed)) {
         closeRow(row.key)
       } else {
         const pk = parentKeyOf(row, nodes)
@@ -232,12 +266,29 @@ function structuralDepth(row: DisplayRow, nodes: TraceTreeNode[]): number {
   return (owner?.depth ?? 0) + 1
 }
 
-/** A branch (node or fold) is currently open iff the very next row is one of
- *  its children — depth exactly one past its own. */
+/** A node branch (trace/tool) is currently open iff the very next row is one
+ *  of its children — depth exactly one past its own. This does NOT hold for
+ *  folds: a fold's members render at the SAME `node.depth` as the fold header
+ *  (only their guide prefix deepens visually), so this check alone always
+ *  reads an open fold as closed. Use `isBranchOpen` at call sites — it is the
+ *  one that knows the difference. */
 function isRowExpanded(rows: DisplayRow[], idx: number, nodes: TraceTreeNode[]): boolean {
   const next = rows[idx + 1]
   if (!next) return false
   return structuralDepth(next, nodes) === structuralDepth(rows[idx], nodes) + 1
+}
+
+/** Whether `row` (a branch — node or fold) is currently showing its children.
+ *  Folds key directly off `expanded`/`collapsed` — tree-model's own
+ *  `isFoldOpen` contract, which `DEFAULT_VISIBLE_DEPTH` never touches — rather
+ *  than the rendered-depth heuristic `isRowExpanded` uses for node branches,
+ *  which folds structurally defeat (see `isRowExpanded`'s comment). */
+function isBranchOpen(
+  row: DisplayRow, rows: DisplayRow[], idx: number, nodes: TraceTreeNode[],
+  expanded: Set<string>, collapsed: Set<string>,
+): boolean {
+  if (row.kind === 'fold') return expanded.has(row.key) && !collapsed.has(row.key)
+  return isRowExpanded(rows, idx, nodes)
 }
 
 /** The row key of the structural parent of `row`, or null at the root.

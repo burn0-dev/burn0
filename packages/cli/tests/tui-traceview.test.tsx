@@ -8,7 +8,7 @@ import {
   openDatabase, ensureProject, insertRun, createWriter, type StorageDriver,
 } from '@burn0/core'
 import type { PendingTrace, EnrichedRow } from '@burn0/core'
-import { TraceView } from '../src/tui/screens/TraceView.js'
+import { TraceView, computeLayout } from '../src/tui/screens/TraceView.js'
 import { baseRow, seedDb } from './helpers/seed.js'
 
 const tick = (ms = 25) => new Promise((r) => setTimeout(r, ms))
@@ -246,5 +246,129 @@ describe('TraceView (tree-model)', () => {
       <TraceView db={db} traceId={777777} columns={140} onBack={noop} onOpenRequest={noop} />)
     await tick()
     expect(lastFrame()).toContain('no longer in the database')
+  })
+
+  // --- review round 1 -------------------------------------------------------
+
+  it('⏎ re-collapses an open fold, and h on an open fold header collapses it in place (Finding 1)', async () => {
+    const { db, rootId } = seedReferenceLikeTrace()
+    const { lastFrame, stdin } = render(
+      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} onOpenRequest={noop} />)
+    await tick()
+    stdin.write(DOWN); await tick()     // root -> fold
+
+    stdin.write('\r'); await tick()     // open
+    expect(lastFrame()).toContain('▾')
+    expect(lastFrame()).toContain('MATERIAL_STOCK')
+
+    stdin.write('\r'); await tick()     // ⏎ again must re-collapse, not no-op
+    expect(lastFrame()).toContain('▸')
+    expect(lastFrame()).not.toContain('MATERIAL_STOCK')
+
+    stdin.write('\r'); await tick()     // reopen
+    expect(lastFrame()).toContain('MATERIAL_STOCK')
+    stdin.write('h'); await tick()      // h on the OPEN header collapses it...
+    expect(lastFrame()).toContain('▸')
+    expect(lastFrame()).not.toContain('MATERIAL_STOCK')
+    // ...and does not jump the cursor to root: another ⏎ still reopens the
+    // same fold, proving the cursor stayed on the header.
+    stdin.write('\r'); await tick()
+    expect(lastFrame()).toContain('MATERIAL_STOCK')
+  })
+
+  it('follows to the new last row even when the old cursor key still exists (Finding 2)', async () => {
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'burn0-tv-follow-')), 'burn0.db'))
+    const projectId = ensureProject(db, { key: 'path:/f', name: 'app', rootPath: '/f', gitRoot: null })
+    const runId = insertRun(db, { projectId, service: null, pid: 1, entry: null, nodeVersion: null })
+    const w = createWriter(db, { projectId, runId, service: null, capturePayloads: false })
+
+    const api = (o: Partial<EnrichedRow> & { at: number }): Partial<EnrichedRow> => ({
+      startedAt: T0 + o.at, latencyMs: 100, method: 'GET', hostname: 'x.example.com',
+      entityClass: 'general', provider: null, model: null,
+      tokensIn: null, tokensOut: null, tokensCached: null, status: 200,
+      ...o,
+    })
+
+    w.write({
+      opened: [{ localId: 1, parentLocalId: null, name: 'GET /x', kind: 'http-server',
+        startedAt: T0, endedAt: T0 + 5000, status: 200, incomplete: false }],
+      closed: [],
+    }, [baseRow(api({
+      at: 100, normalizedEndpoint: '/first-call', costUsd: null, trace: { localId: 1, seq: 0 },
+    }))])
+    const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
+
+    const { lastFrame, stdin } = render(
+      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} onOpenRequest={noop} />)
+    await tick()
+    stdin.write(DOWN); await tick()     // root -> first-call (the last row)
+    expect(lastFrame()).toContain('cost'.padEnd(10) + '— unpriced')
+
+    // first-call's row (and key) is untouched by this append — it is not
+    // removed, just no longer last. A naive identity-first resolver would
+    // keep the cursor right where it is.
+    w.write({ opened: [], closed: [] }, [baseRow(api({
+      at: 2000, normalizedEndpoint: '/second-call', costUsd: 0.05, trace: { localId: 1, seq: 1 },
+    }))])
+    await tick(1200)
+
+    expect(lastFrame()).toContain('/second-call')
+    expect(lastFrame()).toContain('cost'.padEnd(10) + '$0.0500')   // selection followed to the new last row
+  })
+
+  it('clamps against the freshest cursor position, not a stale one from the last rows change (Finding 3)', async () => {
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'burn0-tv-fresh-')), 'burn0.db'))
+    const projectId = ensureProject(db, { key: 'path:/s', name: 'app', rootPath: '/s', gitRoot: null })
+    const runId = insertRun(db, { projectId, service: null, pid: 1, entry: null, nodeVersion: null })
+    const w = createWriter(db, { projectId, runId, service: null, capturePayloads: false })
+
+    const api = (o: Partial<EnrichedRow> & { at: number; endpoint: string }): Partial<EnrichedRow> => ({
+      startedAt: T0 + o.at, latencyMs: 50, method: 'GET', hostname: 'x.example.com',
+      normalizedEndpoint: `/orders/${o.endpoint}`,
+      entityClass: 'general', provider: null, model: null,
+      tokensIn: null, tokensOut: null, tokensCached: null, costUsd: null, status: 200,
+      ...o,
+    })
+
+    w.write({
+      opened: [{ localId: 1, parentLocalId: null, name: 'GET /x', kind: 'http-server',
+        startedAt: T0, endedAt: T0 + 10_000, status: 200, incomplete: false }],
+      closed: [],
+    }, [
+      baseRow(api({ at: 100, endpoint: 'a1', trace: { localId: 1, seq: 0 } })),
+      baseRow(api({ at: 300, endpoint: 'a2', trace: { localId: 1, seq: 1 } })),
+      baseRow(api({ at: 500, endpoint: 'a3', trace: { localId: 1, seq: 2 } })),
+      baseRow({ ...llmCall({ at: 9000, ms: 200, tin: 10, cached: 0, tout: 5, cost: 0.001 }),
+        trace: { localId: 1, seq: 3 } }),
+    ])
+    const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
+
+    const { lastFrame, stdin } = render(
+      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} onOpenRequest={noop} />)
+    await tick()
+    // Pure cursor moves, no rows change in between — this is what must be
+    // tracked continuously, not only when `rows` itself changes.
+    stdin.write(DOWN); await tick()   // root -> a1
+    stdin.write(DOWN); await tick()   // a1 -> a2
+    stdin.write(DOWN); await tick()   // a2 -> a3
+    expect(lastFrame()).toContain('/orders/a3')
+
+    // A fourth same-shape sibling reaches FOLD_MIN — a1..a4 fold into one
+    // row, and a3's individual row (and key) disappears from under the
+    // cursor without ever being the last row.
+    w.write({ opened: [], closed: [] },
+      [baseRow(api({ at: 700, endpoint: 'a4', trace: { localId: 1, seq: 4 } }))])
+    await tick(1200)
+
+    expect(lastFrame()).not.toContain('/orders/a3')
+    // Clamped near its old index (now the LLM turn, the new last row) —
+    // not reset all the way back to root.
+    expect(lastFrame()).toContain('model'.padEnd(10) + MODEL)
+  })
+
+  it('single-pane STEP width is columns - 34 per spec §2.5 (Finding 4)', () => {
+    expect(computeLayout(140).stepWidth).toBe(53)          // two-pane regression
+    expect(computeLayout(90).twoPane).toBe(false)
+    expect(computeLayout(90).stepWidth).toBe(56)            // 90 - 34
   })
 })
