@@ -28,6 +28,9 @@ export interface Line {
   color?: string
   dim?: boolean
   bold?: boolean
+  /** Elaboration: shed before the card truncates its tail. The token block's
+   *  fresh/cached/written lines are marked; an `issues` line never is. */
+  optional?: boolean
 }
 
 const L = (text: string, o: Omit<Line, 'text' | 'segs'> = {}): Line => ({ text, ...o })
@@ -36,13 +39,11 @@ const L = (text: string, o: Omit<Line, 'text' | 'segs'> = {}): Line => ({ text, 
 // Widths, caps, budgets (spec §3)
 // ---------------------------------------------------------------------------
 
-/** Below this many inner columns the strip sheds `first byte`… */
-const MIN_INNER_FIRST_BYTE = 44
-/** …and below this, the start time. Status, duration, cost and tokens never go. */
-const MIN_INNER_START = 36
-/** Same threshold governs the composite lines: attribution gets its own line,
- *  host and bytes split. */
-const NARROW = MIN_INNER_FIRST_BYTE
+// Nothing here is a width THRESHOLD. Spec §3 describes the strip's shed order
+// ("below 44 inner cols drop `first byte`, then start time") and §3's composite
+// lines split the same way; both are implemented by measuring the composed line
+// against the width it actually has. A constant that predicts the fit instead
+// of checking it is wrong on every width it did not anticipate.
 
 const ENDPOINT_CAP = 3
 const QUERY_CAP = 2
@@ -140,10 +141,14 @@ function wrapOn(s: string, sep: string, w: number, lead = ''): string[] {
   return out.length > 0 ? out : ['']
 }
 
-/** Keep `cap` lines; the overflow is stated, never silently dropped. */
+/** Keep `cap` lines; the overflow is stated, never silently dropped — except at
+ *  a cap of one, where the `+N more` marker would consume the only line there
+ *  is and leave a label sitting over a count. One line of the actual message
+ *  beats an exact number of lines you cannot see. */
 function capLines(lines: string[], cap: number, o: { dim?: boolean; color?: string } = {}): Line[] {
   if (cap <= 0) return []
   if (lines.length <= cap) return lines.map((t) => L(t, o))
+  if (cap === 1) return [L(lines[0], o)]
   const kept = lines.slice(0, cap - 1).map((t) => L(t, o))
   kept.push(L(`+${lines.length - (cap - 1)} more`, { dim: true }))
   return kept
@@ -153,8 +158,23 @@ function capLines(lines: string[], cap: number, o: { dim?: boolean; color?: stri
 // Stats strip
 // ---------------------------------------------------------------------------
 
-/** The strip, as segments. Duration carries NO color: red means failure in this
- *  screen and nothing else, so `latencyColor` never touches it (spec §2.4). */
+const SEP = ' · '
+
+function segsWidth(segs: Line[]): number {
+  return segs.reduce((n, s) => n + visWidth(s.text ?? ''), 0)
+    + Math.max(0, segs.length - 1) * visWidth(SEP)
+}
+
+/** The strip, as segments, shed by MEASURED fit — a width threshold only
+ *  predicts whether the line fits; it does not check. Getting that wrong shears
+ *  the line from the right under `wrap="truncate"`, and the right is where the
+ *  cost lives, so `$0.0203` renders as `$0.0…` on exactly the widths a 140-col
+ *  terminal produces. Shed order is the spec's (`first byte`, then start time);
+ *  status, duration, cost and tokens are never shed — if they alone still
+ *  overflow, `stripLines` wraps them onto a second line rather than cut one.
+ *
+ *  Duration carries NO color: red means failure in this screen and nothing
+ *  else, so `latencyColor` never touches it (spec §2.4). */
 export function buildStrip(o: {
   lead: Line
   durationMs: number | null
@@ -164,14 +184,39 @@ export function buildStrip(o: {
   tail?: Line[]
   inner: number
 }): Line[] {
-  const segs: Line[] = [o.lead, { text: fmtMs(o.durationMs) }]
-  if (o.firstByteMs != null && o.inner >= MIN_INNER_FIRST_BYTE) {
-    segs.push({ text: `first byte ${fmtMs(o.firstByteMs)}`, dim: true })
+  const mandatory: Line[] = [o.lead, { text: fmtMs(o.durationMs) }]
+  const tail = o.tail ?? []
+  const optional: Line[] = []
+  if (o.firstByteMs != null) optional.push({ text: `first byte ${fmtMs(o.firstByteMs)}`, dim: true })
+  if (o.startedAt != null) optional.push({ text: fmtTime(o.startedAt), dim: true })
+
+  const assemble = () => [...mandatory, ...optional, ...tail]
+  while (optional.length > 0 && segsWidth(assemble()) > o.inner) optional.shift()
+  return assemble()
+}
+
+/** Pack strip segments into as many lines as they need. The mandatory
+ *  segments outlive every width, so the only honest answer below their combined
+ *  width is a second line. */
+function stripLines(segs: Line[], inner: number): Line[] {
+  const out: Line[] = []
+  let cur: Line[] = []
+  let w = 0
+  for (const s of segs) {
+    const sw = visWidth(s.text ?? '')
+    if (cur.length === 0) { cur = [s]; w = sw; continue }
+    if (w + visWidth(SEP) + sw <= inner) { cur.push(s); w += visWidth(SEP) + sw } else { out.push({ segs: cur }); cur = [s]; w = sw }
   }
-  if (o.startedAt != null && o.inner >= MIN_INNER_START) {
-    segs.push({ text: fmtTime(o.startedAt), dim: true })
-  }
-  return segs.concat(o.tail ?? [])
+  if (cur.length > 0) out.push({ segs: cur })
+  return out
+}
+
+/** Segments on one line if they fit, one line each if they do not — measured,
+ *  never thresholded (spec §3's "host/bytes split lines"). */
+function measuredLines(parts: string[], inner: number, o: Omit<Line, 'text' | 'segs'> = {}): Line[] {
+  const joined = parts.join(SEP)
+  if (visWidth(joined) <= inner) return [L(joined, o)]
+  return parts.map((p) => L(clip(p, inner), o))
 }
 
 function statusSeg(status: number | null): Line {
@@ -202,7 +247,8 @@ function tokenBlock(n: TokenFacts, inner: number): Line[] {
     ? 'tokens  —'
     : `tokens  ${n.tokensIn == null ? '—' : fmtNum(n.tokensIn)} → ${n.tokensOut == null ? '—' : fmtNum(n.tokensOut)}`
   const out = [L(clip(head, inner))]
-  const sub = (label: string, value: string) => L(clip(`  ${label.padEnd(8)}${value}`, inner), { dim: true })
+  const sub = (label: string, value: string) =>
+    L(clip(`  ${label.padEnd(8)}${value}`, inner), { dim: true, optional: true })
 
   if (n.tokensIn != null && (n.tokensCached != null || n.tokensCacheWrite != null)) {
     const fresh = Math.max(0, n.tokensIn - (n.tokensCached ?? 0) - (n.tokensCacheWrite ?? 0))
@@ -273,17 +319,24 @@ type Retention = { payloads: number; metadata: number }
 
 /** "expired" and "never captured" look identical in the database — one absent
  *  row either way. Row age against the reader's retention is the only evidence
- *  there is, so it is what the wording keys on. */
+ *  there is, so it is what the wording keys on. `what` is per-card on purpose:
+ *  an LLM row lost a conversation, an API row lost a request and a response,
+ *  a tool row lost its args and result. */
 function missingPayloadLines(
   what: string, startedAt: number, r: Retention, inner: number, now: number,
 ): Line[] {
+  // These strings are the state's definition, so they wrap rather than clip —
+  // `capturePayloa…` names nothing and `(payload retention: 7 d…` is a number
+  // the reader has to guess at.
+  const state = (s: string) => wrapOn(s, ' — ', inner).flatMap((l) => wrapWords(l, inner))
+    .map((t) => L(t, { dim: true }))
   if (now - startedAt > r.payloads * DAY_MS) {
     return [
-      L(clip(`${what} expired (payload retention: ${r.payloads} days)`, inner), { dim: true }),
-      L(clip(`structure and status remain for ${r.metadata} days`, inner), { dim: true }),
+      ...state(`${what} expired (payload retention: ${r.payloads} days)`),
+      ...state(`structure and status remain for ${r.metadata} days`),
     ]
   }
-  return [L(clip('payloads not captured (capturePayloads: false)', inner), { dim: true })]
+  return state('payloads not captured (capturePayloads: false) — stats only')
 }
 
 const SSE_START = /^\s*(data:|event:)/
@@ -313,8 +366,7 @@ function llmCard(o: {
   node: TraceTreeNode; detail: any; ex: Exchange | null
   inner: number; budget: number; retention: Retention; now: number
 }): Line[] {
-  const { node, detail, ex, inner, retention, now } = o
-  const out: Line[] = [titleLine(`${G.llm} ${node.model ?? node.label}`, theme.entityLlm, inner)]
+  const { node, detail, ex, inner, budget, retention, now } = o
 
   // Exactly one side reported = the cost is a floor, not a figure (spec §1.3).
   const partial = node.pricedCalls > 0 && ((node.tokensIn == null) !== (node.tokensOut == null))
@@ -322,30 +374,54 @@ function llmCard(o: {
     ? { text: `${partial ? '~' : ''}${fmtUsd(node.costUsd)}`, color: theme.cost }
     : { text: '— unpriced', dim: true }
 
-  out.push({
-    segs: buildStrip({
+  const head: Line[] = [
+    titleLine(`${G.llm} ${node.model ?? node.label}`, theme.entityLlm, inner),
+    ...stripLines(buildStrip({
       lead: statusSeg(node.status),
       durationMs: node.durationMs,
       firstByteMs: detail?.firstByteMs ?? null,
       startedAt: node.startedAt,
       tail: [cost],
       inner,
-    }),
-  })
-  if (partial) out.push(L(clip('partial usage — true cost is at least this', inner), { dim: true }))
-  out.push(...tokenBlock(node, inner))
+    }), inner),
+    ...(partial ? [L(clip('partial usage — true cost is at least this', inner), { dim: true })] : []),
+  ]
 
-  // What is left of the content budget once the strip and the token block have
-  // taken theirs, floored at two lines: a card that shrank the conversation to
-  // nothing is the empty panel this redesign exists to kill, and one line of
-  // overflow costs less than that.
-  const fixed = out.length
-  const body = llmBody({ ...o, budget: Math.max(2, o.budget - fixed - 1) })
-  out.push(...body)
-  if (detail?.payload != null) out.push(L('⏎ full payload', { dim: true }))
-  else if (detail == null) out.push(L(clip('request row is gone — pruned by retention', inner), { dim: true }))
-  else out.push(...missingPayloadLines('request & response', node.startedAt, retention, inner, now))
-  return out
+  const tok = tokenBlock(node, inner)
+  const foot: Line[] = detail?.payload != null
+    ? [L('⏎ full payload', { dim: true })]
+    : detail == null
+      ? [L(clip('request row is gone — pruned by retention', inner), { dim: true })]
+      : missingPayloadLines('conversation', node.startedAt, retention, inner, now)
+
+  // Allocation, in the order things are worth keeping. The conversation gets a
+  // floor of one labelled line each way FIRST; the token block's fresh/cached/
+  // written detail and the `⏎` affordance are elaboration and yield to it. The
+  // block's own head line is never negotiable — the strip's tokens never drop.
+  const floor = Math.min(4, llmBodyExtent(o))
+  let spare = budget - head.length - 1 - floor
+  const tokDetail = Math.max(0, Math.min(tok.length - 1, spare))
+  spare -= tokDetail
+  const showFoot = spare >= foot.length
+  const bodyBudget = budget - head.length - 1 - tokDetail - (showFoot ? foot.length : 0)
+
+  return [
+    ...head,
+    ...tok.slice(0, 1 + tokDetail),
+    ...llmBody({ ...o, budget: Math.max(0, bodyBudget) }),
+    ...(showFoot ? foot : []),
+  ]
+}
+
+/** How many lines the conversation could use if nothing were in its way — the
+ *  floor is capped by it so an exchange with no assistant text does not reserve
+ *  room for one. */
+function llmBodyExtent(o: { ex: Exchange | null; detail: any }): number {
+  const { ex, detail } = o
+  if (detail?.payload == null || ex == null) return 0
+  if (!ex.parsed) return 3
+  return (ex.lastUserText ? 2 : 0) + (ex.assistantText ? 2 : 0)
+    + (ex.toolResults.length > 0 ? 1 : 0) + (ex.toolCalls.length > 0 ? 1 : 0)
 }
 
 /** The conversation itself: earlier-messages marker, system head, USER,
@@ -362,7 +438,7 @@ function llmBody(o: {
     return [
       L(clip('could not parse the stored payload as JSON — showing it raw', inner), { color: theme.warn }),
       ...rawPreview(String(bad ?? ''), inner),
-    ]
+    ].slice(0, Math.max(1, budget))
   }
 
   const markerText = [
@@ -385,7 +461,9 @@ function llmBody(o: {
     results: Math.min(resultLines.length, RESULTS_CAP),
     assistant: Math.min(assistantLines.length, ASSISTANT_CAP),
     tools: Math.min(toolLines.length, TOOLS_CAP),
-  }, Math.max(2, budget - labels))
+    // The floor lives in the allocator now (`llmCard`), so this is exact
+    // arithmetic: whatever the caller reserved is what gets spent.
+  }, Math.max(0, budget - labels))
 
   const out: Line[] = []
   out.push(...capLines(markerLines, caps.marker, { dim: true }).map((l) => ({ ...l, text: clip(l.text!, inner) })))
@@ -428,9 +506,8 @@ function toolCard(o: {
     dim: status === 'running',
   }
   const out: Line[] = [titleLine(`${G.tool} ${node.label}`, theme.model, inner)]
-  out.push({
-    segs: buildStrip({ lead: statusLine, durationMs: node.durationMs, startedAt: node.startedAt, inner }),
-  })
+  out.push(...stripLines(
+    buildStrip({ lead: statusLine, durationMs: node.durationMs, startedAt: node.startedAt, inner }), inner))
 
   const attribution = node.attribution === 'exact' ? 'attribution exact (withTrace)'
     : node.attribution === 'window' ? 'attribution window (inferred)'
@@ -497,20 +574,20 @@ function apiCard(o: {
     out.push(...capLines(wrapOn(redactQueryString(decodeQuery(queryString)), '&', inner), QUERY_CAP, { dim: true }))
   }
 
-  out.push({
-    segs: buildStrip({
-      lead: statusSeg(node.status),
-      durationMs: node.durationMs,
-      firstByteMs: detail?.firstByteMs ?? null,
-      startedAt: node.startedAt,
-      inner,
-    }),
-  })
+  out.push(...stripLines(buildStrip({
+    lead: statusSeg(node.status),
+    durationMs: node.durationMs,
+    firstByteMs: detail?.firstByteMs ?? null,
+    startedAt: node.startedAt,
+    inner,
+  }), inner))
 
+  // Measured, not thresholded: a 40-character tenant hostname pushes the byte
+  // counts off the end at widths a constant would have called wide enough, and
+  // `4.0 KB i` is not a byte count.
   const host = node.hostname ?? ''
   const bytes = `${fmtBytes(node.reqBytes)} out / ${fmtBytes(node.resBytes)} in`
-  if (inner >= NARROW) out.push(L(clip(`${host} · ${bytes}`, inner), { dim: true }))
-  else { out.push(L(clip(host, inner), { dim: true })); out.push(L(clip(bytes, inner), { dim: true })) }
+  out.push(...measuredLines([host, bytes], inner, { dim: true }))
 
   if (node.status == null) {
     out.push(L(clip('no response — network failure', inner), { color: theme.err }))
@@ -563,7 +640,8 @@ function traceCard(o: {
   const lead: Line = node.status == null
     ? { text: '—', dim: true }
     : { text: String(node.status), color: statusColor(node.status) }
-  out.push({ segs: buildStrip({ lead, durationMs: node.durationMs, startedAt: node.startedAt, inner }) })
+  out.push(...stripLines(
+    buildStrip({ lead, durationMs: node.durationMs, startedAt: node.startedAt, inner }), inner))
   if (node.status == null) {
     out.push(...wrapWords('not observed (handler threw, or the connection upgraded)', inner)
       .map((t) => L(t, { dim: true })))
@@ -753,9 +831,11 @@ export function TraceDetail({ row, nodes = [], db, width, height, retention, now
   now?: number
 }) {
   const inner = Math.max(8, width - 4)
-  // Height budget B = max(12, rows); content C = B − 5 (border, title, the
-  // footer line the tree pane owns, and one line of slack).
-  const content = Math.max(4, Math.max(12, height) - 5)
+  // Spec §3, end to end: B = max(12, rows − 12); content C = B − 5. `height` is
+  // the terminal's row count, so the −12 (the chrome the screen spends on tabs,
+  // header, footer and the tree pane's own margins) is subtracted HERE — the
+  // one place that knows it is a row count and not a budget.
+  const content = Math.max(4, Math.max(12, height - 12) - 5)
 
   const node = row?.kind === 'node' ? row.node : undefined
   const requestId = node?.type === 'request' ? node.requestId : null
@@ -800,9 +880,31 @@ export function TraceDetail({ row, nodes = [], db, width, height, retention, now
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} width={width}>
-      {lines.map((l, i) => <LineView key={i} line={l} inner={inner} />)}
+      {fitCard(lines, content).map((l, i) => <LineView key={i} line={l} inner={inner} />)}
     </Box>
   )
+}
+
+/** The last word on the height budget. The LLM card allocates against `C` line
+ *  by line, but the cards that are just as long as their data (a tool's ARGS, a
+ *  root's issue list) need a backstop, and Ink does not clip — a card that
+ *  overran would paint over the tree pane's own rows.
+ *
+ *  Elaboration goes first, from the bottom up: losing `written 0` costs a
+ *  detail, losing the `issues` line costs the reason the user opened the trace.
+ *  Only then does the tail truncate, and what it dropped is stated. */
+function fitCard(lines: Line[], budget: number): Line[] {
+  if (lines.length <= budget) return lines
+  const kept = [...lines]
+  for (let i = kept.length - 1; i >= 0 && kept.length > budget; i--) {
+    if (kept[i].optional) kept.splice(i, 1)
+  }
+  if (kept.length <= budget) return kept
+  if (budget <= 1) return kept.slice(0, Math.max(0, budget))
+  return [
+    ...kept.slice(0, budget - 1),
+    L(`+${kept.length - (budget - 1)} more lines · ⏎ opens the payload`, { dim: true }),
+  ]
 }
 
 /** Every line is padded to the full inner width before it is handed to Ink.

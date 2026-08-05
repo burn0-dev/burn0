@@ -229,7 +229,7 @@ describe('TraceDetail — LLM card', () => {
     })
   }
 
-  it('drops `first byte` then the start time below the narrow threshold', () => {
+  it('sheds strip segments by MEASURED fit, in the spec order', () => {
     const { db, rootId } = seedTrace()
     const { rows, nodes } = viewOf(db, rootId)
 
@@ -237,14 +237,40 @@ describe('TraceDetail — LLM card', () => {
     expect(wide).toContain('first byte 240ms')
     expect(wide).toMatch(/\d\d:\d\d:\d\d/)
 
+    // 36 wide: the full strip cannot fit, so `first byte` goes first…
     const narrow = frame(llmRow(rows), db, nodes, 36)
     expect(narrow).not.toContain('first byte')
-    expect(narrow).not.toMatch(/\d\d:\d\d:\d\d/)
-    // never droppable
+    // …and everything that must never drop is still whole
     expect(narrow).toContain('200')
     expect(narrow).toContain('5.6s')
     expect(narrow).toContain('$0.0203')
     expect(narrow).toContain('46,802 → 846')
+
+    // 28 wide: the start time is the next to go
+    const tight = frame(llmRow(rows), db, nodes, 28)
+    expect(tight).not.toContain('first byte')
+    expect(tight).not.toMatch(/\d\d:\d\d:\d\d/)
+    expect(tight).toContain('$0.0203')
+  })
+
+  it('keeps the cost whole at every width in the 36..60 inner-column band', () => {
+    const { db, rootId } = seedTrace()
+    const { rows, nodes } = viewOf(db, rootId)
+    for (let inner = 36; inner <= 60; inner += 2) {
+      const f = frame(llmRow(rows), db, nodes, inner + 4)
+      expect(f, `inner ${inner}: cost sheared`).toContain('$0.0203')
+      expect(f, `inner ${inner}: status/duration sheared`).toMatch(/200 · 5\.6s/)
+      expect(f, `inner ${inner}: token head sheared`).toContain('tokens  46,802 → 846')
+    }
+  })
+
+  it('keeps the API host and bytes whole by splitting lines, never shearing', () => {
+    const { db, rootId } = seedTrace()
+    const { rows, nodes } = viewOf(db, rootId)
+    for (let inner = 36; inner <= 60; inner += 2) {
+      const f = frame(apiRow(rows, 'A_SalesOrder'), db, nodes, inner + 4)
+      expect(f, `inner ${inner}: bytes sheared`).toContain('512 B out / 4.0 KB in')
+    }
   })
 
   it('never colors the duration — red is failure only (spec §2.4)', () => {
@@ -256,7 +282,7 @@ describe('TraceDetail — LLM card', () => {
     expect(dur!.color).toBeUndefined()
   })
 
-  it('shrinks in the spec order on a short terminal, keeping USER and ASSISTANT', () => {
+  it('shrinks in the spec order on a short terminal, keeping real USER and ASSISTANT text', () => {
     const { db, rootId } = seedTrace()
     const { rows, nodes } = viewOf(db, rootId)
     const f = frame(llmRow(rows), db, nodes, 60, 14)
@@ -264,7 +290,28 @@ describe('TraceDetail — LLM card', () => {
     expect(f).not.toContain('You are an SAP')            // system dropped first
     expect(f).toContain('USER')
     expect(f).toContain('ASSISTANT')
+    // A label over a `+N more` count is the empty panel reborn: the surviving
+    // line has to be CONTENT.
+    expect(f).toContain('how many sales orders')
+    expect(f).toContain('I found 42 sales orders')
+    expect(f).not.toMatch(/(USER|ASSISTANT)\s*\n\s*\+\d+ more/)
     expect(f).toContain('tokens  46,802 → 846')          // the strip never shrinks
+  })
+
+  it('fits inside the spec height budget C = max(12, rows − 12) − 5', () => {
+    const { db, rootId } = seedTrace()
+    const { rows, nodes } = viewOf(db, rootId)
+    const cards: Array<[string, DisplayRow | undefined]> = [
+      ['root', rows[0]], ['fold', foldRow(rows)], ['llm', llmRow(rows)],
+      ['tool', toolRow(rows)], ['api', apiRow(rows, 'A_SalesOrder')],
+    ]
+    for (const height of [14, 24, 40]) {
+      const C = Math.max(12, height - 12) - 5
+      for (const [name, row] of cards) {
+        const body = frame(row, db, nodes, 60, height).split('\n').length - 2   // minus both borders
+        expect(body, `${name} @${height}: ${body} lines, budget ${C}`).toBeLessThanOrEqual(C)
+      }
+    }
   })
 
   it('omits null token lines and shows known zeros', () => {
@@ -325,14 +372,28 @@ describe('TraceDetail — LLM card', () => {
     {
       const { db, rootId } = seedTrace({ capturePayloads: false })
       const { rows, nodes } = viewOf(db, rootId)
-      expect(frame(llmRow(rows), db, nodes)).toContain('capturePayloads: false')
+      // 66 wide (inner 62) fits the sentence; at 60 it wraps on the dash rather
+      // than shearing the flag name that names the state.
+      expect(frame(llmRow(rows), db, nodes, 66))
+        .toContain('payloads not captured (capturePayloads: false) — stats only')
+      const narrow = frame(llmRow(rows), db, nodes, 60)
+      expect(narrow).toContain('payloads not captured (capturePayloads: false)')
+      expect(narrow).toContain('stats only')
     }
     {
       const { db, rootId } = seedTrace({ capturePayloads: false, ageDays: 10 })
       const { rows, nodes } = viewOf(db, rootId)
       const f = frame(llmRow(rows), db, nodes)
-      expect(f).toContain('payload retention: 7 days')
+      // Per-card phrasing: an LLM row lost a conversation, an API row lost a
+      // request and a response.
+      expect(f).toContain('conversation expired (payload retention: 7 days)')
       expect(f).toContain('structure and status remain for 30 days')
+    }
+    {
+      const { db, rootId } = seedTrace({ capturePayloads: false, ageDays: 10 })
+      const { rows, nodes } = viewOf(db, rootId)
+      expect(frame(apiRow(rows, 'A_SalesOrder'), db, nodes))
+        .toContain('request & response expired (payload retention: 7 days)')
     }
   })
 })
