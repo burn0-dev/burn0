@@ -15,6 +15,7 @@ export type {
   TraceRow, UsageRow, UsageNode, Scope, ProjectSummary, TraceFilter,
   TraceListRow, TraceTreeNode,
 } from './query/index.js'
+export { parseToolCalls, parseToolResults, type ToolCall, type ToolResult } from './llm/tools.js'
 export { withTags, currentTags } from './context/index.js'
 export { withTrace, type PendingTrace, type TraceStep } from './context/trace.js'
 import { tag } from './context/index.js'
