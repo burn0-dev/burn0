@@ -232,11 +232,17 @@ export function referenceTree(over: {
   expiredCalls?: number
   incomplete?: boolean
   rootStatus?: number | null
+  /** Still running: `endedAt` (via `ms: null`) and `incomplete: false` — the
+   *  same shape `traceTree` returns for a trace that has not closed yet.
+   *  Status also defaults to null here (unless overridden): a trace that has
+   *  not ended has nothing to report a status FOR yet, matching what
+   *  `closeTrace` would have set had it run. */
+  live?: boolean
 } = {}): { root: TraceTreeNode; nodes: TraceTreeNode[] } {
   const nodes: TraceTreeNode[] = []
   const root = traceNode({
-    id: 1, depth: 0, at: T0, ms: over.incomplete ? null : ROOT_DURATION_MS, label: ROOT_LABEL,
-    status: over.rootStatus === undefined ? 200 : over.rootStatus,
+    id: 1, depth: 0, at: T0, ms: (over.incomplete || over.live) ? null : ROOT_DURATION_MS, label: ROOT_LABEL,
+    status: over.rootStatus === undefined ? (over.live ? null : 200) : over.rootStatus,
     costUsd: 0.1448, pricedCalls: 7,
     tin: 342_000, tout: 2822, cached: 324_500, tokenCalls: 7, calls: 32,
     incomplete: over.incomplete ?? false,

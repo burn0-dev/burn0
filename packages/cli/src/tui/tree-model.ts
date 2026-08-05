@@ -74,11 +74,17 @@ export function buildRows(opts: {
   collapsed: Set<string>
   stepWidth: number
   flat: boolean
+  /** The clock the `● LIVE` elapsed figure is measured against. Threaded in
+   *  rather than read with `Date.now()` here so a render is reproducible —
+   *  the caller (`TraceView`) is the one place allowed to not know that in
+   *  advance (spec §4). */
+  now?: number
 }): DisplayRow[] {
   const { tree, expanded, collapsed, flat } = opts
   const nodes = tree.nodes
   if (nodes.length === 0) return []
   const w = Math.max(1, Math.floor(opts.stepWidth))
+  const now = opts.now ?? Date.now()
 
   // Denominator for the relative-timing rule. While the root is still open it
   // has no duration, so the widest thing we did observe stands in for it —
@@ -123,14 +129,26 @@ export function buildRows(opts: {
     api: nodes.filter((n) => n.type === 'request' && !isLlmRow(n)).length,
   }
 
-  const ctx: Ctx = { nodes, childrenOf, hasLlm, ordinal, mix, rootDur, w, expanded, collapsed, flat }
+  const ctx: Ctx = { nodes, childrenOf, hasLlm, ordinal, mix, rootDur, w, expanded, collapsed, flat, now }
   const rows: DisplayRow[] = []
+
+  // A live root that has not made its first call yet has nothing to show —
+  // not even the "expired" wording, which is about calls that DID happen and
+  // are now gone. Mutually exclusive with the expired-info-row case below
+  // (that one requires expiredCalls > 0; this one requires it to be 0), so
+  // there is never a question of which notice wins.
+  const waiting = isLiveRoot(ctx.nodes[0])
+    && childrenOf[0].length === 0 && ctx.nodes[0].expiredCalls === 0
 
   if (flat) {
     // Flat mode answers "what calls happened, in what order" — structure is
     // exactly what it drops. Info rows stay: hiding a data-loss notice in one
     // mode is still hiding data.
     rows.push(nodeRow(ctx, 0, [], false))
+    if (waiting) {
+      rows.push(waitingRow(ctx))
+      return rows
+    }
     for (let i = 0; i < nodes.length; i++) {
       if (nodes[i].expiredCalls > 0) rows.push(infoRow(ctx, i, [], false))
     }
@@ -143,7 +161,8 @@ export function buildRows(opts: {
   }
 
   rows.push(nodeRow(ctx, 0, [], false))
-  emitChildren(ctx, rows, 0, [])
+  if (waiting) rows.push(waitingRow(ctx))
+  else emitChildren(ctx, rows, 0, [])
   return rows
 }
 
@@ -158,6 +177,17 @@ interface Ctx {
   expanded: Set<string>
   collapsed: Set<string>
   flat: boolean
+  now: number
+}
+
+/** A root is "live" iff it has not ended and the sweep has not force-closed
+ *  it — the same test §4 draws between "still running" and "force-closed,
+ *  observation window over". Restricted to the root: only the top-level trace
+ *  gets a `● LIVE` badge and an elapsed TOOK; the sweep's force-close is what
+ *  §4 talks about for nested scopes, and that path is `incomplete`, handled
+ *  separately. */
+function isLiveRoot(root: TraceTreeNode): boolean {
+  return root.depth === 0 && root.type === 'trace' && root.endedAt == null && !root.incomplete
 }
 
 type Group =
@@ -279,6 +309,13 @@ function nodeRow(ctx: Ctx, i: number, anc: string[], last: boolean): DisplayRow 
   const kids = ctx.childrenOf[i].length
   const branch = !root && n.type !== 'request' && kids > 0
   const shut = branch && !isOpen(ctx, i)
+  const live = root && isLiveRoot(n)
+  // "Closed, but the response was never observed" — a handler that threw or a
+  // connection that upgraded, not a failure the request layer can name. Never
+  // red: that color is reserved for requests that DID get an answer and it
+  // was bad (spec §4's epistemic split). Live and incomplete take precedence:
+  // both are their own, more specific, unknown-status story.
+  const unknownClosed = root && !live && !n.incomplete && n.status == null
 
   let marker = ''
   let name: (budget: number) => string = () => n.label
@@ -304,16 +341,23 @@ function nodeRow(ctx: Ctx, i: number, anc: string[], last: boolean): DisplayRow 
   } else if (n.type === 'tool') {
     marker = `${G.tool} `
     suffix = attributionSuffix(n) + toolStatusSuffix(n) + incompleteSuffix(n) + shutSuffix(shut, kids)
-    color = n.toolStatus === 'error' ? theme.err
-      : n.toolStatus === 'unresolved' ? theme.warn
-        : theme.model
+    color = n.incomplete ? theme.warn
+      : n.toolStatus === 'error' ? theme.err
+        : n.toolStatus === 'unresolved' ? theme.warn
+          : theme.model
   } else {
     // trace: the root, or a nested withTrace. No marker — the accent and the
     // absence of a glyph are what say "this is a scope, not a call".
     suffix = (root ? mixSuffix(ctx, n) : '')
+      + (live ? ` ${G.live} LIVE` : '')
       + (n.status != null && n.status >= 400 ? ` ${n.status}` : '')
+      + (unknownClosed ? ' —' : '')
       + incompleteSuffix(n) + shutSuffix(shut, kids)
-    color = n.status != null && n.status >= 400 ? theme.err : theme.accent
+    color = n.incomplete ? theme.warn
+      : n.status != null && n.status >= 400 ? theme.err
+        : unknownClosed ? undefined
+          : theme.accent
+    dim = unknownClosed
     bold = true
   }
 
@@ -329,8 +373,8 @@ function nodeRow(ctx: Ctx, i: number, anc: string[], last: boolean): DisplayRow 
     ...(dim ? { stepDim: true } : {}),
     cost: costCell(n),
     tokens: tokensCell(n, ctx.hasLlm[i]),
-    took: fmtMs(n.durationMs),
-    tookEmphasis: root ? 'normal' : emphasis(n.durationMs, ctx.rootDur),
+    took: live ? fmtElapsed(Math.max(0, ctx.now - n.startedAt)) : fmtMs(n.durationMs),
+    tookEmphasis: live ? 'dim' : root ? 'normal' : emphasis(n.durationMs, ctx.rootDur),
   }
 }
 
@@ -358,6 +402,28 @@ function foldRow(ctx: Ctx, idxs: number[], anc: string[], last: boolean, open: b
     tokens: '',
     took: fmtMs(span),
     tookEmphasis: emphasis(span, ctx.rootDur),
+  }
+}
+
+/** The root's only child, shown while it is live and has not made its first
+ *  call yet. Never confusable with the expired-calls notice above: `buildRows`
+ *  only reaches this when `expiredCalls === 0`, so a trace that has both no
+ *  visible children AND lost some to the sweep still gets the honest "N calls
+ *  expired" wording instead. */
+function waitingRow(ctx: Ctx): DisplayRow {
+  const prefix = guides(ctx, [], G.guideL)
+  const text = 'waiting for first call…'
+  return {
+    key: 'info:waiting',
+    kind: 'info',
+    isBranch: false,
+    requestId: null,
+    step: compose(ctx.w, prefix, '', '', () => text),
+    stepDim: true,
+    cost: '',
+    tokens: '',
+    took: '',
+    tookEmphasis: 'dim',
   }
 }
 
@@ -459,6 +525,14 @@ function emphasis(ms: number | null, rootDur: number): 'dim' | 'normal' | 'warn'
   if (ms == null || rootDur <= 0) return 'dim'
   const share = ms / rootDur
   return share >= WARN_SHARE ? 'warn' : share >= NORMAL_SHARE ? 'normal' : 'dim'
+}
+
+/** `14s…` — a running count, not a duration: the trace has not finished, so
+ *  there is no total to report yet, only how long it has been running so far
+ *  (spec §4). The `…` is doing real work: `fmtMs` would print `14.0s` here,
+ *  which claims a precision "still counting" does not have. */
+function fmtElapsed(ms: number): string {
+  return `${Math.floor(ms / 1000)}s${G.elide}`
 }
 
 /** First member's start to the last member's end — the wall time the wall cost,

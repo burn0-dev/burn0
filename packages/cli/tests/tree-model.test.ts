@@ -166,6 +166,112 @@ describe('buildRows — names and suffixes', () => {
     const r = buildRows({ tree: t, expanded: NONE(), collapsed: NONE(), stepWidth: 66, flat: false })
     expect(r[0].step).toContain('⚠ incomplete')
     expect(r[0].took).toBe('—')
+    expect(r[0].stepColor).toBe('yellow')
+  })
+})
+
+describe('buildRows — live, incomplete and status-null roots (spec §4)', () => {
+  it('a live root gets ● LIVE and an elapsed, dim TOOK — never the expired wording', () => {
+    const t = referenceTree({ live: true })
+    const now = T0 + 14_000
+    const r = buildRows({ tree: t, expanded: NONE(), collapsed: NONE(), stepWidth: 66, flat: false, now })
+    expect(r[0].step).toContain('● LIVE')
+    expect(r[0].took).toBe('14s…')
+    expect(r[0].tookEmphasis).toBe('dim')
+    // still aggregates normally — the facts observed so far
+    expect(r[0].cost).toBe('$0.1448')
+  })
+
+  it('is deterministic against the `now` passed in, not the wall clock', () => {
+    const t = referenceTree({ live: true })
+    const r1 = buildRows({ tree: t, expanded: NONE(), collapsed: NONE(), stepWidth: 66, flat: false, now: T0 + 5000 })
+    const r2 = buildRows({ tree: t, expanded: NONE(), collapsed: NONE(), stepWidth: 66, flat: false, now: T0 + 5000 })
+    expect(r1[0].took).toBe(r2[0].took)
+    expect(r1[0].took).toBe('5s…')
+  })
+
+  it('a live root with no calls yet says so, and never says "expired"', () => {
+    const root = traceNode({ id: 1, depth: 0, at: T0, ms: null, label: ROOT_LABEL, status: null, calls: 0 })
+    const r = buildRows({
+      tree: { root, nodes: [root] }, expanded: NONE(), collapsed: NONE(), stepWidth: 53, flat: false, now: T0 + 3000,
+    })
+    expect(r.length).toBe(2)
+    expect(r[1].kind).toBe('info')
+    expect(r[1].step).toContain('waiting for first call…')
+    expect(r[1].step).not.toContain('expired')
+    // also true in flat mode — the same notice, not hidden either way
+    const flat = buildRows({
+      tree: { root, nodes: [root] }, expanded: NONE(), collapsed: NONE(), stepWidth: 53, flat: true, now: T0 + 3000,
+    })
+    expect(flat.some((x) => x.step.includes('waiting for first call'))).toBe(true)
+  })
+
+  it('a live root that already lost calls to the sweep reports the expiry, not "waiting"', () => {
+    const root = traceNode({ id: 1, depth: 0, at: T0, ms: null, label: ROOT_LABEL, status: null, calls: 0, expiredCalls: 5 })
+    const r = buildRows({
+      tree: { root, nodes: [root] }, expanded: NONE(), collapsed: NONE(), stepWidth: 53, flat: false, now: T0 + 3000,
+    })
+    expect(r[1].step).toContain('5 calls expired')
+    expect(r[1].step).not.toContain('waiting')
+  })
+
+  it('incomplete colors the whole row warn, live and status-null-closed never do', () => {
+    const incomplete = buildRows({
+      tree: referenceTree({ incomplete: true }), expanded: NONE(), collapsed: NONE(), stepWidth: 66, flat: false,
+    })
+    expect(incomplete[0].stepColor).toBe('yellow')
+
+    const live = buildRows({
+      tree: referenceTree({ live: true }), expanded: NONE(), collapsed: NONE(), stepWidth: 66, flat: false, now: T0,
+    })
+    expect(live[0].stepColor).not.toBe('red')
+    expect(live[0].stepColor).not.toBe('yellow')
+
+    const closedUnknown = buildRows({
+      tree: referenceTree({ rootStatus: null }), expanded: NONE(), collapsed: NONE(), stepWidth: 66, flat: false,
+    })
+    expect(closedUnknown[0].stepColor).not.toBe('red')
+    expect(closedUnknown[0].stepColor).toBeUndefined()
+  })
+
+  it('a closed root with a null status reads dim "—", distinct from live and incomplete', () => {
+    const r = buildRows({
+      tree: referenceTree({ rootStatus: null }), expanded: NONE(), collapsed: NONE(), stepWidth: 66, flat: false,
+    })
+    expect(r[0].step.trimEnd().endsWith('—')).toBe(true)
+    expect(r[0].stepDim).toBe(true)
+    expect(r[0].step).not.toContain('LIVE')
+    expect(r[0].step).not.toContain('incomplete')
+  })
+
+  it('a request with a null status stays red — the epistemic split holds', () => {
+    const root = traceNode({ id: 1, depth: 0, at: T0, ms: 1000, label: ROOT_LABEL, status: null })
+    const dead = apiReq({ id: 2, depth: 1, at: T0, ms: 100, endpoint: `${SAP_PREFIX}A_dead`, status: null })
+    const r = buildRows({
+      tree: { root, nodes: [root, dead] }, expanded: NONE(), collapsed: NONE(), stepWidth: 53, flat: false,
+    })
+    expect(r[0].stepColor).toBeUndefined()     // the trace root: dim, not red
+    expect(r.find((x) => x.node?.id === 2)!.stepColor).toBe('red')   // the request: red
+  })
+
+  it('every row stays exactly stepWidth cells across live/waiting/unknown-closed states', () => {
+    const trees = [
+      referenceTree({ live: true }),
+      referenceTree({ rootStatus: null }),
+    ]
+    for (const t of trees) {
+      for (const w of [29, 35, 53, 66, 98]) {
+        const r = buildRows({ tree: t, expanded: NONE(), collapsed: NONE(), stepWidth: w, flat: false, now: T0 + 9000 })
+        for (const row of r) expect(visWidth(row.step), `w${w}/${row.key}`).toBe(w)
+      }
+    }
+    const empty = traceNode({ id: 1, depth: 0, at: T0, ms: null, label: ROOT_LABEL, status: null, calls: 0 })
+    for (const w of [29, 35, 53, 66, 98]) {
+      const r = buildRows({
+        tree: { root: empty, nodes: [empty] }, expanded: NONE(), collapsed: NONE(), stepWidth: w, flat: false, now: T0,
+      })
+      for (const row of r) expect(visWidth(row.step), `waiting w${w}/${row.key}`).toBe(w)
+    }
   })
 })
 

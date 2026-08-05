@@ -5,6 +5,7 @@ import type { TraceListRow } from '@burn0/core'
 import { usePoll, useTermSize } from '../hooks.js'
 import { theme, statusColor, latencyColor } from '../theme.js'
 import { TableHeader, TableRow, colWidths, type ColDef } from '../ui.js'
+import { NAV, useFooter } from '../footer.js'
 import { fmtUsd, fmtNum, fmtMs, fmtTime, fmtTokPair } from '../../format.js'
 import { TracesScreen } from './Traces.js'
 import { TraceView } from './TraceView.js'
@@ -56,13 +57,21 @@ export function TraceListScreen({ db, scope, onOpenRequest }: {
     }
   })
 
+  // Own the footer only for this screen's own table: `⏎ open` for an
+  // untraced row (it goes straight to the payload, spec §4), `⏎ open trace`
+  // otherwise. Deferred (`false`) once a trace is open or the flat sub-view
+  // is showing — those own their own line (TraceView) or fall back to this
+  // tab's App-level default (TracesScreen, reused from the API tab).
+  const here = rows[at]
+  const footerText = `${NAV} · ↑↓ select · ${here && here.id == null ? '⏎ open' : '⏎ open trace'} · f flat`
+  useFooter(openTrace != null || flat ? false : footerText)
+
   if (openTrace != null) {
     return (
       <TraceView
         db={db}
         traceId={openTrace}
         onBack={() => setOpenTrace(null)}
-        onOpenRequest={onOpenRequest}
       />
     )
   }

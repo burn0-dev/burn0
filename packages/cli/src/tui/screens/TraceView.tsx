@@ -4,8 +4,10 @@ import { query, type StorageDriver } from '@burn0/core'
 import type { TraceTreeNode } from '@burn0/core'
 import { usePoll, useTermSize } from '../hooks.js'
 import { theme } from '../theme.js'
+import { NAV, useFooter } from '../footer.js'
 import { buildRows, rowKey, type DisplayRow } from '../tree-model.js'
 import { TraceDetail } from './TraceDetail.js'
+import { DebugScreen } from './Debug.js'
 
 /** Two-pane trace view: tree on the left, detail following the selection on the
  *  right. Ink has no layout query, so the width branch is manual — below this,
@@ -19,8 +21,13 @@ const TOKENS_W = 12
 const TOOK_W = 7
 const GAP = '  '
 
-const FOOTER_TREE = 'q quit · tab/←→ screens · ↑↓ move · h/l fold · ⏎ open · f flat · esc back'
-const FOOTER_FLAT = 'q quit · tab/←→ screens · ↑↓ move · h/l fold · ⏎ open · f tree · esc back'
+// One footer string per state (spec §4's tree / flat / payload / pruned) —
+// `useFooter` below claims the line App renders; this screen no longer paints
+// its own (that was the double-footer bug: App's stale tab-2 default sat
+// above this screen's accurate one).
+const FOOTER_TREE = `${NAV} · ↑↓ move · h/l fold · ⏎ open · f flat · esc back`
+const FOOTER_FLAT = `${NAV} · ↑↓ move · h/l fold · ⏎ open · f tree · esc back`
+const FOOTER_PAYLOAD = `${NAV} · esc back`
 const FOOTER_PRUNED = 'q quit · esc back'
 
 /** Pane math, pulled out pure so both the component and a regression test can
@@ -38,13 +45,15 @@ export function computeLayout(columns: number): {
   return { twoPane, paneWidth, detailWidth, stepWidth }
 }
 
-export function TraceView({ db, traceId, columns: forced, onBack, onOpenRequest }: {
+export function TraceView({ db, traceId, columns: forced, now: forcedNow, onBack }: {
   db: StorageDriver
   traceId: number
   /** Override for tests and for callers that already measured. */
   columns?: number
+  /** Override for tests — the clock `● LIVE`'s elapsed figure is measured
+   *  against (spec §4). Defaults to the wall clock. */
+  now?: number
   onBack: () => void
-  onOpenRequest: (id: number) => void
 }) {
   const term = useTermSize()
   const columns = forced ?? term.columns
@@ -55,12 +64,24 @@ export function TraceView({ db, traceId, columns: forced, onBack, onOpenRequest 
   const [collapsed, setCollapsed] = useState(() => new Set<string>())
   const [flat, setFlat] = useState(false)
   const [cursorKey, setCursorKey] = useState<string | null>(null)
+  // The payload screen as a child state (spec §4): `esc` unwinds it without
+  // unmounting anything above, so `expanded`/`collapsed`/`cursorKey` are all
+  // still exactly what they were. This replaces the old App-level
+  // `selectedRequestId` swap for everything opened from inside this tree —
+  // that swap remounted the whole screen stack on the way back, which is
+  // what lost the tree in the first place.
+  const [openRequestId, setOpenRequestId] = useState<number | null>(null)
 
   const { twoPane, paneWidth, detailWidth, stepWidth } = computeLayout(columns)
 
   const rows = useMemo(
-    () => (tree ? buildRows({ tree, expanded, collapsed, stepWidth, flat }) : []),
-    [tree, expanded, collapsed, stepWidth, flat],
+    () => (tree ? buildRows({ tree, expanded, collapsed, stepWidth, flat, now: forcedNow ?? Date.now() }) : []),
+    // `forcedNow` (not a raw `Date.now()` call) in the dep array: a fixed
+    // override must never re-trigger this memo, and a live clock's own
+    // "freshness" already comes from `tree`'s identity changing on every 1s
+    // poll tick — this only needs to grab a current timestamp when it was
+    // about to recompute anyway.
+    [tree, expanded, collapsed, stepWidth, flat, forcedNow],
   )
 
   // Cursor resolution, run whenever `rows` itself changes (a poll rebuilding
@@ -124,6 +145,13 @@ export function TraceView({ db, traceId, columns: forced, onBack, onOpenRequest 
   }
 
   useInput((input, key) => {
+    // The payload screen owns nothing but `esc`: every tree key (arrows,
+    // h/l/f/⏎) belongs to the row that was selected before it opened, and
+    // must not touch `expanded`/`collapsed`/`cursorKey` while it's up.
+    if (openRequestId != null) {
+      if (key.escape) setOpenRequestId(null)
+      return
+    }
     if (key.escape) { onBack(); return }
     if (rows.length === 0) return
 
@@ -143,7 +171,10 @@ export function TraceView({ db, traceId, columns: forced, onBack, onOpenRequest 
     if (!row) return
 
     if (key.return) {
-      if (row.requestId != null) { onOpenRequest(row.requestId); return }
+      // A leaf's ⏎ opens the payload in place — no fold-member exception (see
+      // Task 10's judgment call 1): a folded call's payload is not less
+      // openable than the same call unfolded.
+      if (row.requestId != null) { setOpenRequestId(row.requestId); return }
       if (row.isBranch) {
         if (isBranchOpen(row, rows, at, nodes, expanded, collapsed)) closeRow(row.key)
         else openRow(row.key)
@@ -165,6 +196,14 @@ export function TraceView({ db, traceId, columns: forced, onBack, onOpenRequest 
     }
   })
 
+  // One `useFooter` call, unconditional (rules of hooks), covering all four
+  // states — must run before the pruned early return below, or the hook
+  // count would differ between renders.
+  const footerText = tree === null ? FOOTER_PRUNED
+    : openRequestId != null ? FOOTER_PAYLOAD
+      : flat ? FOOTER_FLAT : FOOTER_TREE
+  useFooter(footerText)
+
   if (tree === null) {
     return (
       <Box flexDirection="column">
@@ -172,15 +211,15 @@ export function TraceView({ db, traceId, columns: forced, onBack, onOpenRequest 
           Trace no longer in the database — pruned by retention while you were viewing it.
         </Text>
         <Text dimColor>esc returns to the list.</Text>
-        <Box marginTop={1}>
-          <Text dimColor>{FOOTER_PRUNED}</Text>
-        </Box>
       </Box>
     )
   }
 
+  if (openRequestId != null) {
+    return <DebugScreen db={db} requestId={openRequestId} />
+  }
+
   const selected = rows[at]
-  const footerText = flat ? FOOTER_FLAT : FOOTER_TREE
 
   const treePane = (
     <Box flexDirection="column" width={twoPane ? paneWidth : undefined}>
@@ -191,28 +230,20 @@ export function TraceView({ db, traceId, columns: forced, onBack, onOpenRequest 
     </Box>
   )
 
-  return (
-    <Box flexDirection="column">
-      {twoPane ? (
-        // The width is stated, not inherited: the tree pane is sized from
-        // `columns`, so the container must be laid out against the same
-        // number or the detail pane silently gets whatever is left of a
-        // different width.
-        <Box gap={2} width={columns}>
-          {treePane}
-          <Box flexDirection="column" width={detailWidth}>
-            <TraceDetail
-              row={selected} nodes={nodes} db={db}
-              width={detailWidth} height={term.rows}
-            />
-          </Box>
-        </Box>
-      ) : treePane}
-      <Box marginTop={1}>
-        <Text dimColor>{footerText}</Text>
+  return twoPane ? (
+    // The width is stated, not inherited: the tree pane is sized from
+    // `columns`, so the container must be laid out against the same number or
+    // the detail pane silently gets whatever is left of a different width.
+    <Box gap={2} width={columns}>
+      {treePane}
+      <Box flexDirection="column" width={detailWidth}>
+        <TraceDetail
+          row={selected} nodes={nodes} db={db}
+          width={detailWidth} height={term.rows} now={forcedNow}
+        />
       </Box>
     </Box>
-  )
+  ) : treePane
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +294,7 @@ function TreeRow({ row, selected }: { row: DisplayRow; selected: boolean }) {
 function structuralDepth(row: DisplayRow, nodes: TraceTreeNode[]): number {
   if (row.kind === 'node') return row.node!.depth
   if (row.kind === 'fold') return row.members![0].depth
+  if (row.key === 'info:waiting') return 1                 // always the root's only child
   const id = Number(row.key.slice('info:expired:'.length))
   const owner = nodes.find((n) => n.type !== 'request' && n.id === id)
   return (owner?.depth ?? 0) + 1
@@ -298,6 +330,7 @@ function isBranchOpen(
  *  never itself inside another fold — the scan is safe over the raw DFS
  *  order without re-deriving tree-model's internal parent index. */
 function parentKeyOf(row: DisplayRow, nodes: TraceTreeNode[]): string | null {
+  if (row.key === 'info:waiting') return nodes[0] ? rowKey(nodes[0]) : null
   if (row.kind === 'info') {
     const id = Number(row.key.slice('info:expired:'.length))
     const owner = nodes.find((n) => n.type !== 'request' && n.id === id)

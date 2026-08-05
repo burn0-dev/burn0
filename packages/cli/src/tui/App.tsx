@@ -5,6 +5,7 @@ import { usePoll, useTermSize } from './hooks.js'
 import { theme } from './theme.js'
 import { Rule } from './ui.js'
 import { label, type ResolvedScope } from '../scope.js'
+import { FooterContext, NAV } from './footer.js'
 import { OverviewScreen } from './screens/Overview.js'
 import { UsageScreen } from './screens/Usage.js'
 import { TracesScreen } from './screens/Traces.js'
@@ -14,9 +15,10 @@ import { DebugScreen } from './screens/Debug.js'
 
 export const TABS = ['Overview', 'Usage', 'LLM', 'API', 'Logs'] as const
 
-const NAV = 'q quit · tab/←→ screens'
-// Per-tab, because the keys genuinely differ — a footer that lists keys the
-// current screen ignores is worse than no footer.
+// Per-tab defaults, shown until (if ever) the active screen claims the line
+// itself via `useFooter` — see `footer.ts`. TraceList/TraceView (tab 2) own
+// theirs for their two list-view states; this entry is the fallback for its
+// other states (flat sub-view, mid-trace) and everything tabs 0/1/3/4 do.
 const FOOTERS: Record<number, string> = {
   0: `${NAV} · ↓ window`,
   1: `${NAV} · ↑↓ move · h/l/enter expand`,
@@ -34,6 +36,10 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
   const [tab, setTab] = useState(0)
   const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null)
   const [subFocus, setSubFocus] = useState(false) // a screen widget holds ←→ (e.g. Overview window selector)
+  // The one footer line an active (sub)screen can claim via `useFooter`
+  // (footer.ts). Reset to null whenever the tab changes so a stale claim from
+  // the screen being left can never survive onto the new one even for a tick.
+  const [footerOverride, setFooterOverride] = useState<string | null>(null)
   // null = every project. Cycled by `p`; starts at whatever the CLI resolved.
   const [projectId, setProjectId] = useState<number | null>(initial.scope.projectIds?.[0] ?? null)
   const [service, setService] = useState<string | null>(initial.scope.services?.[0] ?? null)
@@ -54,6 +60,9 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
 
   const switchTab = (next: (t: number) => number) => {
     setSubFocus(false)
+    setFooterOverride(null) // the screen being left clears its own claim on
+    // unmount; this is the belt to that suspenders, and what makes Q12.1's
+    // "tab switch resets drill" true of the footer too, not just the tree.
     setTab(next)
   }
 
@@ -85,46 +94,52 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
   const openDebug = (id: number) => setSelectedRequestId(id)
 
   return (
-    <Box flexDirection="column" width={columns} height={rows} paddingX={1}>
-      <Box>
-        <Text bold color={theme.accent}>burn0</Text>
-        <Text dimColor> │ </Text>
-        <Text color={theme.model}>{scopeLabel}{service ? ` · ${service}` : ''}</Text>
-        <Text dimColor> │</Text>
-        {TABS.map((t, i) => (
-          <Text
-            key={t}
-            inverse={i === tab && selectedRequestId == null}
-            bold={i === tab}
-            color={i === tab ? theme.accent : undefined}
-            dimColor={i !== tab}
-          > {t} </Text>
-        ))}
-        <Box flexGrow={1} justifyContent="flex-end">
-          <Text dimColor>{`${stats.requestCount} reqs`}</Text>
+    <FooterContext.Provider value={setFooterOverride}>
+      <Box flexDirection="column" width={columns} height={rows} paddingX={1}>
+        <Box>
+          <Text bold color={theme.accent}>burn0</Text>
+          <Text dimColor> │ </Text>
+          <Text color={theme.model}>{scopeLabel}{service ? ` · ${service}` : ''}</Text>
+          <Text dimColor> │</Text>
+          {TABS.map((t, i) => (
+            <Text
+              key={t}
+              inverse={i === tab && selectedRequestId == null}
+              bold={i === tab}
+              color={i === tab ? theme.accent : undefined}
+              dimColor={i !== tab}
+            > {t} </Text>
+          ))}
+          <Box flexGrow={1} justifyContent="flex-end">
+            <Text dimColor>{`${stats.requestCount} reqs`}</Text>
+          </Box>
+        </Box>
+        <Rule columns={columns - 2} />
+        <Box flexDirection="column" flexGrow={1} marginTop={1}>
+          {selectedRequestId != null ? (
+            <DebugScreen db={db} requestId={selectedRequestId} />
+          ) : (
+            <>
+              {tab === 0 && <OverviewScreen db={db} scope={scope} onSubFocus={setSubFocus} />}
+              {tab === 1 && <UsageScreen db={db} scope={scope} />}
+              {tab === 2 && <TraceListScreen db={db} scope={scope} onOpenRequest={openDebug} />}
+              {tab === 3 && <TracesScreen db={db} scope={scope} llm={false} onOpen={openDebug} />}
+              {tab === 4 && <LogsScreen db={db} scope={scope} onOpen={openDebug} />}
+            </>
+          )}
+        </Box>
+        <Rule columns={columns - 2} />
+        <Box>
+          {/* Exactly one footer line, always: `selectedRequestId` (the
+             remaining App-level swap, for screens other than TraceView — see
+             footer.ts) forces its own; otherwise the active screen's own
+             `useFooter` claim wins over this tab's static default. */}
+          <Text dimColor>{selectedRequestId != null
+            ? 'q quit · esc back'
+            : `${footerOverride ?? FOOTERS[tab]}${projects.length > 1 ? ' · p project' : ''}${services.length > 1 ? ' · s service' : ''}`}</Text>
         </Box>
       </Box>
-      <Rule columns={columns - 2} />
-      <Box flexDirection="column" flexGrow={1} marginTop={1}>
-        {selectedRequestId != null ? (
-          <DebugScreen db={db} requestId={selectedRequestId} />
-        ) : (
-          <>
-            {tab === 0 && <OverviewScreen db={db} scope={scope} onSubFocus={setSubFocus} />}
-            {tab === 1 && <UsageScreen db={db} scope={scope} />}
-            {tab === 2 && <TraceListScreen db={db} scope={scope} onOpenRequest={openDebug} />}
-            {tab === 3 && <TracesScreen db={db} scope={scope} llm={false} onOpen={openDebug} />}
-            {tab === 4 && <LogsScreen db={db} scope={scope} onOpen={openDebug} />}
-          </>
-        )}
-      </Box>
-      <Rule columns={columns - 2} />
-      <Box>
-        <Text dimColor>{selectedRequestId != null
-          ? 'q quit · esc back'
-          : `${FOOTERS[tab]}${projects.length > 1 ? ' · p project' : ''}${services.length > 1 ? ' · s service' : ''}`}</Text>
-      </Box>
-    </Box>
+    </FooterContext.Provider>
   )
 }
 

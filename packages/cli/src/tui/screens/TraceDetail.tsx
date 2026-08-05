@@ -611,23 +611,46 @@ function decodeQuery(qs: string): string {
 }
 
 function traceCard(o: {
-  node: TraceTreeNode; nodes: TraceTreeNode[]; inner: number; budget: number
+  node: TraceTreeNode; nodes: TraceTreeNode[]; inner: number; budget: number; now: number
 }): Line[] {
-  const { node, nodes, inner } = o
+  const { node, nodes, inner, now } = o
   const out: Line[] = [titleLine(node.label, theme.accent, inner)]
 
+  const live = node.depth === 0 && node.endedAt == null && !node.incomplete
   const lead: Line = node.status == null
     ? { text: '—', dim: true }
     : { text: String(node.status), color: statusColor(node.status) }
   out.push(...stripLines(
     buildStrip({ lead, durationMs: node.durationMs, startedAt: node.startedAt, inner }), inner))
-  if (node.status == null) {
+  if (live) {
+    // Facts so far, not a verdict — the strip above already shows the
+    // aggregates rolled up over whatever ran before `now`; this line is only
+    // the "still going" fact those numbers don't say on their own.
+    const elapsed = Math.max(0, Math.round((now - node.startedAt) / 1000))
+    out.push(L(clip(`${G.live} LIVE — started ${fmtTime(node.startedAt)}, ${elapsed}s ago`, inner), { color: theme.accent }))
+  } else if (node.status == null && !node.incomplete) {
+    // The known-unknown story is "not observed" (closed, no status) OR
+    // "force-closed by the sweep" (incomplete below) — never both: an
+    // incomplete root's status IS explained, just not by this line.
     out.push(...wrapWords('not observed (handler threw, or the connection upgraded)', inner)
       .map((t) => L(t, { dim: true })))
   }
   if (node.incomplete) {
+    // Split on the dash first (a visual break when both halves fit their own
+    // line), THEN word-wrap each half independently. `wrapOn` alone will not
+    // do here: its own line-packer CLIPS a segment longer than `inner`
+    // (losing the sentence's whole second half) rather than wrapping it —
+    // fine for the short segments `missingPayloadLines` below feeds it, wrong
+    // for this one, whose second half routinely exceeds a narrow pane.
+    const INCOMPLETE_SENTENCE = 'response never finished — force-closed by the stale sweep '
+      + 'after being open ≥10m. Totals are what was observed.'
+    const [firstHalf, secondHalf] = INCOMPLETE_SENTENCE.split(' — ')
+    out.push(
+      ...wrapWords(firstHalf, inner).map((t) => L(t, { color: theme.warn })),
+      ...wrapWords(`— ${secondHalf}`, inner).map((t) => L(t, { color: theme.warn })),
+    )
     const openFor = node.endedAt != null ? fmtMs(node.endedAt - node.startedAt) : '—'
-    out.push(L(clip(`⚠ open for ${openFor} (observation, not duration)`, inner), { color: theme.warn }))
+    out.push(L(clip(`open for ${openFor} (observation, not duration)`, inner), { color: theme.warn }))
   }
 
   const sub = subtree(nodes, node)
@@ -849,7 +872,7 @@ export function TraceDetail({ row, nodes = [], db, width, height, retention, now
   let lines: Line[] = []
   if (row.kind === 'fold') lines = foldCard(row.members ?? [], inner)
   else if (row.kind === 'info') lines = infoCard(row, inner)
-  else if (node?.type === 'trace') lines = traceCard({ node, nodes, inner, budget: content })
+  else if (node?.type === 'trace') lines = traceCard({ node, nodes, inner, budget: content, now: clock })
   else if (node?.type === 'tool') lines = toolCard({ node, io, inner, budget: content, retention: r, now: clock })
   else if (node?.type === 'request' && (node.llm || node.model != null)) {
     lines = llmCard({ node, detail, ex, inner, budget: content, retention: r, now: clock })

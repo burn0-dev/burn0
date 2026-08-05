@@ -12,6 +12,7 @@ import { baseRow } from './helpers/seed.js'
 
 const tick = (ms = 25) => new Promise((r) => setTimeout(r, ms))
 const DOWN = '\u001B[B'
+const ESC = '\u001B'
 const T0 = 1_700_000_000_000
 
 function trace(over: Partial<PendingTrace> & { localId: number }): PendingTrace {
@@ -123,7 +124,7 @@ describe('TraceListScreen', () => {
 describe('TraceView', () => {
   it('indents the tree and keeps numeric columns aligned across depths', async () => {
     const { db, rootId } = seeded()
-    const { lastFrame } = render(<TraceView db={db} traceId={rootId} columns={100} onBack={noop} onOpenRequest={noop} />)
+    const { lastFrame } = render(<TraceView db={db} traceId={rootId} columns={100} onBack={noop} />)
     await tick()
     const lines = lastFrame()!.split('\n')
     const rootLine = lines.find((l) => l.includes('POST /api/chat'))!
@@ -135,7 +136,7 @@ describe('TraceView', () => {
 
   it('uses two panes when the terminal is wide enough', async () => {
     const { db, rootId } = seeded()
-    const wide = render(<TraceView db={db} traceId={rootId} columns={130} onBack={noop} onOpenRequest={noop} />)
+    const wide = render(<TraceView db={db} traceId={rootId} columns={130} onBack={noop} />)
     await tick()
     // The detail card — a bordered box beside the tree, with the root card's
     // pricing-coverage line inside it.
@@ -144,7 +145,7 @@ describe('TraceView', () => {
 
     // Ink has no layout query, so this is a manual branch — below 110 columns
     // the detail pane would squeeze the tree into unreadability
-    const narrow = render(<TraceView db={db} traceId={rootId} columns={90} onBack={noop} onOpenRequest={noop} />)
+    const narrow = render(<TraceView db={db} traceId={rootId} columns={90} onBack={noop} />)
     await tick()
     expect(narrow.lastFrame()).not.toContain('╭')
   })
@@ -152,7 +153,7 @@ describe('TraceView', () => {
   it('the detail pane follows the selection', async () => {
     const { db, rootId } = seeded()
     const { lastFrame, stdin } = render(
-      <TraceView db={db} traceId={rootId} columns={130} onBack={noop} onOpenRequest={noop} />)
+      <TraceView db={db} traceId={rootId} columns={130} onBack={noop} />)
     await tick()
     stdin.write(DOWN)   // onto retrieve-context
     await tick()
@@ -182,7 +183,7 @@ describe('TraceView', () => {
     ])
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
 
-    const { lastFrame } = render(<TraceView db={db} traceId={rootId} columns={100} onBack={noop} onOpenRequest={noop} />)
+    const { lastFrame } = render(<TraceView db={db} traceId={rootId} columns={100} onBack={noop} />)
     await tick()
     const lines = lastFrame()!.split('\n')
     const toolLine = lines.find((l) => l.includes('search_orders'))!
@@ -209,21 +210,29 @@ describe('TraceView', () => {
     }, [api({ startedAt: T0 + 150, status: 200, trace: { localId: 1, seq: 0 } })])
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
 
-    const { lastFrame } = render(<TraceView db={db} traceId={rootId} columns={100} onBack={noop} onOpenRequest={noop} />)
+    const { lastFrame } = render(<TraceView db={db} traceId={rootId} columns={100} onBack={noop} />)
     await tick()
     // every HTTP call returned 200; the failure is only visible on the tool
     expect(lastFrame()).toContain('error')
   })
 
-  it('opens the request under the cursor', async () => {
+  it('opens the request under the cursor inline (payload-as-child), and esc returns to the same row', async () => {
     const { db, rootId } = seeded()
-    const opened: number[] = []
-    const { stdin } = render(
-      <TraceView db={db} traceId={rootId} columns={130} onBack={noop} onOpenRequest={(id) => opened.push(id)} />)
+    const { lastFrame, stdin } = render(
+      <TraceView db={db} traceId={rootId} columns={130} onBack={noop} />)
     await tick()
     stdin.write(DOWN); await tick()
-    stdin.write(DOWN); await tick()   // a request node
+    stdin.write(DOWN); await tick()   // a request node (the Pinecone call)
+    expect(lastFrame()).toContain('api.pinecone.io')
     stdin.write('\r'); await tick()
-    expect(opened).toHaveLength(1)
+    // the payload screen replaced the tree in place — no App-level swap, no
+    // second mount: the tree's own content is simply gone from this frame,
+    // and the request's own payload (DebugScreen) is up instead.
+    expect(lastFrame()).not.toContain('retrieve-context')
+    expect(lastFrame()).toContain('Request headers')
+    stdin.write(ESC); await tick()
+    // back to the tree, same row still selected — cursor/expansion intact.
+    expect(lastFrame()).toContain('retrieve-context')
+    expect(lastFrame()).toContain('api.pinecone.io')
   })
 })

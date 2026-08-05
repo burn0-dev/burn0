@@ -11,6 +11,7 @@ import type { PendingTrace, EnrichedRow, TraceTreeNode } from '@burn0/core'
 import { baseRow } from './helpers/seed.js'
 import { buildRows, type DisplayRow } from '../src/tui/tree-model.js'
 import { TraceDetail, fitSections, buildStrip } from '../src/tui/screens/TraceDetail.js'
+import { fmtTime } from '../src/format.js'
 
 // A minute ago: recent enough that a missing payload means "never captured",
 // not "expired" — the two states the pane must never confuse.
@@ -186,10 +187,10 @@ function viewOf(db: StorageDriver, rootId: number, stepWidth = 40) {
 
 function frame(
   row: DisplayRow | undefined, db: StorageDriver, nodes: TraceTreeNode[],
-  width = 60, height = 40,
+  width = 60, height = 40, now?: number,
 ): string {
   const { lastFrame } = render(
-    <TraceDetail row={row} nodes={nodes} db={db} width={width} height={height} retention={RETENTION} />)
+    <TraceDetail row={row} nodes={nodes} db={db} width={width} height={height} retention={RETENTION} now={now} />)
   return lastFrame()!
 }
 
@@ -482,6 +483,56 @@ describe('TraceDetail — trace root card', () => {
     const { db, rootId } = seedTrace({ expiredCalls: 9 })
     const { rows, nodes } = viewOf(db, rootId)
     expect(frame(rows[0], db, nodes)).toContain('(excludes 9 expired calls)')
+  })
+})
+
+describe('TraceDetail — trace root card: live and incomplete (task 16, spec §4)', () => {
+  function seedRoot(o: { endedAt: number | null; status: number | null; incomplete: boolean }) {
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'burn0-td-lc-')), 'burn0.db'))
+    const projectId = ensureProject(db, { key: 'path:/lc', name: 'app', rootPath: '/lc', gitRoot: null })
+    const runId = insertRun(db, { projectId, service: null, pid: 1, entry: null, nodeVersion: null })
+    createWriter(db, { projectId, runId, service: null, capturePayloads: false }).write({
+      opened: [{ localId: 1, parentLocalId: null, name: ROOT_LABEL, kind: 'http-server',
+        startedAt: T0, endedAt: o.endedAt, status: o.status, incomplete: o.incomplete }],
+      closed: [],
+    }, [])
+    const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id as number
+    return { db, rootId }
+  }
+
+  it('a live root states it plainly: ● LIVE — started HH:MM:SS, Ns ago', () => {
+    const { db, rootId } = seedRoot({ endedAt: null, status: null, incomplete: false })
+    const { rows, nodes } = viewOf(db, rootId)
+    const now = T0 + 42_000
+    const f = frame(rows[0], db, nodes, 60, 40, now)
+    expect(f).toContain(`${'●'} LIVE — started ${fmtTime(T0)}, 42s ago`)
+    // still a known-unknown status, not a failure — no "not observed" wording
+    // while it's live, that's the CLOSED-null-status story, not this one
+    expect(f).not.toContain('not observed')
+  })
+
+  it('an incomplete root explains the force-close and marks the window as observation, not duration', () => {
+    const { db, rootId } = seedRoot({ endedAt: T0 + 660_000, status: null, incomplete: true })
+    const { rows, nodes } = viewOf(db, rootId)
+    const f = frame(rows[0], db, nodes)
+    expect(f).toContain('response never finished')
+    expect(f).toContain('force-closed by the stale sweep')
+    expect(f).toContain('≥10m')
+    expect(f).toContain('Totals are what was observed')
+    // fmtMs has no `m ss` form (spec §7, a recorded rejection) — the open-for
+    // figure is plain seconds, same as every other duration in this pane.
+    expect(f).toContain('open for 660.0s (observation, not duration)')
+    expect(f).not.toContain('● LIVE')
+    expect(f).not.toContain('not observed (handler threw')
+  })
+
+  it('a closed root with a null status reads "not observed", never live or incomplete wording', () => {
+    const { db, rootId } = seedRoot({ endedAt: T0 + 5000, status: null, incomplete: false })
+    const { rows, nodes } = viewOf(db, rootId)
+    const f = frame(rows[0], db, nodes)
+    expect(f).toContain('not observed (handler threw, or the connection upgraded)')
+    expect(f).not.toContain('● LIVE')
+    expect(f).not.toContain('force-closed')
   })
 })
 
