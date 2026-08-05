@@ -197,6 +197,123 @@ fetch-only outbound capture; no auto-roots for Bun's `node:http` compat servers
 (`Bun.serve` is the primitive); post-return `ReadableStream` work may fall outside the
 trace; WS upgrades close with status NULL; tested on 1.3.9 only.
 
+---
+
+## 2026-08-05 — TraceView redesign + honest token semantics (spec §1.2, §2.6, §8, §12.1b)
+
+**Shipped:** the trace view is rewritten wholesale on top of a pure `tree-model.ts` row
+builder — a real LangGraph trace that used to render as a 32-row flat wall of truncated
+SAP URLs now renders as a tree with fold rows, turn ordinals, and per-row token/cost
+columns that agree with the aggregate. Token semantics changed underneath every screen
+that shows a number: `tokens_in` is now total effective input (fresh + cache-read +
+cache-write) for every provider, `↺` marks known cache-read, a `written` line appears in
+the detail pane wherever cache-write happened, and `computeCost` prices all three tiers
+instead of silently zeroing Anthropic's fresh-input cost against a large cache. Detail
+pane rewritten as five chat-style cards (LLM/tool/API/root/fold) with degraded-state
+wording for expired payloads, redaction, and unparseable bodies. Full state contract:
+live root (`● LIVE`, elapsed TOOK), incomplete (force-closed, `⚠`), pruned mid-view,
+status-NULL split (request=known-failure-red vs root=known-unknown-dim), parallel-tool
+attribution (`~turn`), flat mode, single-pane fallback below 110 columns. Full design:
+`docs/superpowers/specs/2026-08-04-traceview-redesign-design.md`. Spec `docs/spec/2026-07-25-burn0-v1-spec.md`
+§3.6/§8.7/§12.1b updated; schema is now v4.
+
+**Normalization decision: parse-time, not display-time — and why parse-time won.**
+Providers disagree about what "input tokens" means (OpenAI/Gemini report the total with
+cache as a subset; Anthropic reports uncached-only, with cache-read and cache-write
+additive on top, billed at different rates). The alternative — leave storage alone and
+reconcile per-provider at every display site — was rejected because burn0 has *five*
+token-displaying screens (TraceList, Logs, Usage, TraceView tree, detail pane) plus
+`computeCost`, and provider-branching logic duplicated six times drifts the moment one
+site is updated and another isn't; it also can't fix `SUM(tokens_in)` across a trace with
+mixed providers, which is exactly the discovery-incident case. Normalizing once in
+`enrich()` via `normalizeUsage()` — before the row is written — means every consumer,
+present and future, reads one honest number with no provider knowledge required. The one
+trap: normalization must run exactly once. Putting it inside the per-format parsers
+(JSON vs SSE) would double-add cache tokens for payloads that hit both code paths in the
+same request lifecycle; it runs in `enrich()`, downstream of both parsers, instead.
+Provenance (`inputIncludesCache`) is decided by **which key supplied the number**
+(`prompt_tokens`/`promptTokenCount` vs `input_tokens`), not by hostname — a gateway that
+reshapes a provider's payload is classified by payload shape, which is the only thing
+that's actually true of it.
+
+**Fold rules (run-folds, the discovery-wall fix).** ≥4 consecutive sibling *leaf* API
+requests collapse by default into one row (`▸ 12× GET sap.com  …/opu/odata/sap/*`) when
+they share the same entity, the same HTTP verb, and every member has status < 400. Any
+error or null-status row breaks the run — a fold must never swallow a failure, so a
+fold row is always a true statement ("12 succeeded"), never a lossy one. `l`/`⏎` expands
+losslessly in place; fold identity is keyed on the *first* member's request id so an open
+fold survives live appends to the trace. Threshold 4 is a named constant, not config —
+below 4, the discovery wall doesn't yet exist and folding would hide more than it saves.
+
+### Traps found during implementation — do not rediscover
+
+- **Fold-state-from-depths bug.** The tree-pane's "is this branch open" check compared a
+  row's depth to its next row's depth (`+1` = open, correct for tool/trace branches whose
+  children really do sit one level deeper). Fold rows broke it silently: a fold's members
+  are the *same* leaf nodes at the *same* `node.depth` they'd have unfolded — tree-model
+  only deepens their guide-prefix rendering, never the depth field — so an open fold
+  always looked closed to this check. `⏎` could open a fold once but never close it again.
+  Fix: a dedicated `isBranchOpen()` dispatches on row kind — folds check the
+  `expanded`/`collapsed` sets directly; everything else keeps the depth check. Any future
+  "is this row expanded" logic must go through `isBranchOpen`, not re-derive depth deltas.
+- **Live-follow precedence, inverted.** The cursor-resolution effect tried identity lookup
+  (`rows.findIndex(cursorKey)`) first and only fell back to "was I on the last row → follow
+  the new last row" when identity lookup failed. But the whole point of the live-append
+  case is that the cursored row usually does *not* disappear — it just stops being last —
+  so identity succeeding permanently defeated follow for exactly the scenario follow
+  exists for. Fixed by checking was-last-row first, unconditionally, with identity as the
+  fallback. Order-of-checks bugs in "resolve selection after a list changed" logic are
+  invisible in isolation; only a live-append test with a *surviving* cursor key catches
+  this class.
+- **Strip measured-fit, not threshold guesses.** The detail-pane strip line (status ·
+  duration · cost · tokens · optional first-byte/start-time) was first built on hardcoded
+  width thresholds (drop first-byte below 44 cols, start-time below 36) inferred from the
+  spec prose. Real content varies (a 4-digit vs 6-digit cost) enough that a fixed
+  threshold both over-drops at some widths and overflows at others. Rewritten to measure
+  the actually-composed line and shed segments while it doesn't fit, only ever dropping
+  first-byte then start-time, never a mandatory segment (which wraps onto a second line
+  instead of being cut). Any fixed-column-count budget for a variable-content line is a
+  bug waiting for the input that breaks the guess.
+- **`capLines(n, 1)` needs its own rule.** A cap of exactly one line must keep the one
+  real line of content and drop the `+N more` marker entirely — "+6 more" with no visible
+  text above it is worse than one truncated-but-real line. Generalizing the "keep N lines,
+  append +M more" cap without a floor case for N=1 produces a card that is pure metadata.
+- **`truncLeft` boundary-slash ruling.** Left-truncation snaps forward to the next `/`
+  only when that slash sits within the first 4 characters of the kept tail — and a slash
+  sitting at index 0 (already on the boundary) is a no-op, not a "delete this char and
+  snap" case. The original `slice(slashIndex || 1)` treated index-0 as falsy and defaulted
+  to slicing at 1, silently eating the boundary slash on every truncated endpoint
+  (`…sap/API_…` instead of `…/sap/API_…` — the tail looks like it lost its head). `0` and
+  "not found" are different values; never coalesce them with `||`.
+- **better-sqlite3 is ABI-locked to the Node version it was built against.** The gate must
+  run under the same Node the package was installed/rebuilt for — this repo pins
+  **nvm node v22.12.0**. Running core's test suite under a different Node on `PATH`
+  (or with a shell that doesn't source nvm) throws a native-module ABI mismatch, not a
+  helpful "wrong Node version" message. `$HOME/.local/bin` must also be on `PATH` and
+  bun resolved at `~/.bun/bin/bun` for the `test:bun` half of the gate — three separate
+  runtimes (node via nvm, system PATH tools, bun) all need to be reachable in the same
+  shell before `pnpm -r test` / `pnpm --filter @burn0/core test:bun` will both go green.
+
+### What remains
+
+- `theme.selBg` — deferred; Ink has no terminal-capability detection, so selection stays
+  `<Text inverse>` rather than a themed background.
+- ASCII glyph fallback (no-Unicode terminals) — recorded as a follow-up, one-file change
+  by construction, not built.
+- `fmtMs`'s `m ss` form — explicitly rejected for this redesign (elapsed/duration stay in
+  seconds-with-decimal or the new `fmtElapsed` "still counting" form; no minutes anywhere).
+- §5/§6 (API pricing + cost engine) — still untouched, unchanged since the 2026-07-26
+  entry above. Still deferred by the user ("cost later").
+- Full list of smaller deferred items and judgment calls (fold-member `⏎` behavior,
+  `FOOTERS[2]` fallback status, `requestDetail` not selecting `tokens_cache_write`, the
+  24-row-terminal detail-card truncation point, and others) lives in each task's own
+  report under `.superpowers/sdd/2026-08-04-traceview-redesign/task-*-report.md` — not
+  re-copied here.
+
+**Gate, final run:** `pnpm -r test` → core 27 files/278 tests, cli 21 files/234 tests, all
+green (512 total). `pnpm --filter @burn0/core test:bun` → 3 files/20 tests/83 expect()
+calls, all green. `tsc --noEmit` clean in both `@burn0/core` and `@burn0/cli`.
+
 ### Next
 
 - Q13.1 `patchHttp` under Bun (axios-on-Bun) once compat internals verified.

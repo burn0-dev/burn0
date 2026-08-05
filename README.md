@@ -45,3 +45,7 @@ compat get no automatic trace roots — `Bun.serve` is the supported primitive).
 
 Dev-only tool: auto-disabled when NODE_ENV=production (override with BURN0_FORCE=1).
 Data: ~/.burn0/burn0.db (SQLite). Payloads kept 7 days, metadata 30 days. Secrets redacted by default.
+
+Token columns show total effective input across every screen (fresh + cached + written), with
+`↺` marking calls that had cached context; the trace view renders agent loops as a tree —
+LLM turns, tool calls, and the API calls each tool made — instead of a flat list of requests.
