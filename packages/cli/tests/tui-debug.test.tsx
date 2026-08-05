@@ -24,8 +24,8 @@ describe('DebugScreen', () => {
   })
 })
 
-describe('DebugScreen LLM input/output panels', () => {
-  it('shows extracted question and answer side by side', () => {
+describe('DebugScreen LLM conversation section (task 15: chat-style, full transcript)', () => {
+  it('shows the full conversation in order — system, user, assistant', () => {
     const { db } = seedDb([{
       model: 'gpt-4o', tokensIn: 120, tokensOut: 40, costUsd: 0.004,
       reqBody: JSON.stringify({ model: 'gpt-4o', messages: [
@@ -38,11 +38,64 @@ describe('DebugScreen LLM input/output panels', () => {
     }])
     const id = query.traces(db, { llm: true })[0].id
     const f = render(<DebugScreen db={db} requestId={id} />).lastFrame()!
-    expect(f).toContain('Input')
-    expect(f).toContain('Output')
+    expect(f).toContain('SYSTEM')
+    expect(f).toContain('be brief')
+    expect(f).toContain('USER')
     expect(f).toContain('What is the CAP theorem?')
+    expect(f).toContain('ASSISTANT')
     expect(f).toContain('Pick two of consistency')
-    expect(f).toContain('120')
-    expect(f).toContain('40')
+    expect(f).toContain('tokens  120 → 40')
+  })
+
+  it('a tool-call-only response never renders empty — shows the → name(args) line', () => {
+    const { db } = seedDb([{
+      model: 'gpt-4o', tokensIn: 50, tokensOut: 10,
+      reqBody: JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'user', content: 'where is my order' }] }),
+      resBody: JSON.stringify({
+        model: 'gpt-4o',
+        choices: [{ message: { role: 'assistant', content: null, tool_calls: [
+          { id: 'call_a', type: 'function', function: { name: 'search_orders', arguments: '{"id":42}' } },
+        ] } }],
+      }),
+    }])
+    const id = query.traces(db, { llm: true })[0].id
+    const f = render(<DebugScreen db={db} requestId={id} />).lastFrame()!
+    expect(f).toContain('→ search_orders({"id":42})')
+  })
+
+  it('tool results render with ✓/✗, name and bytes', () => {
+    const { db } = seedDb([{
+      model: 'gpt-4o', tokensIn: 50, tokensOut: 10,
+      reqBody: JSON.stringify({
+        messages: [
+          { role: 'user', content: 'where is my order' },
+          { role: 'assistant', content: null, tool_calls: [
+            { id: 'call_a', type: 'function', function: { name: 'search_orders', arguments: '{}' } },
+          ] },
+          { role: 'tool', tool_call_id: 'call_a', content: 'shipped' },
+        ],
+      }),
+      resBody: JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'It shipped.' } }] }),
+    }])
+    const id = query.traces(db, { llm: true })[0].id
+    const f = render(<DebugScreen db={db} requestId={id} />).lastFrame()!
+    expect(f).toContain('TOOL RESULT ✓ search_orders')
+  })
+
+  it('replaces the ", N cached" phrasing with the fresh/cached/written token block', () => {
+    const { db } = seedDb([{
+      model: 'gpt-4o', tokensIn: 46802, tokensOut: 846, tokensCached: 46800, tokensCacheWrite: 1024,
+      reqBody: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+      resBody: JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'hello' } }] }),
+    }])
+    const id = query.traces(db, { llm: true })[0].id
+    const f = render(<DebugScreen db={db} requestId={id} />).lastFrame()!
+    expect(f).not.toContain('cached)')
+    expect(f).not.toContain(', 46,800 cached')
+    expect(f).toContain('fresh')
+    expect(f).toContain('cached')
+    expect(f).toContain('46,800')
+    expect(f).toContain('written')
+    expect(f).toContain('1,024')
   })
 })

@@ -59,6 +59,16 @@ describe('traces / requestDetail / liveTail', () => {
     expect(d).not.toBeNull()
     expect(d!.payload!.reqBody).toBe('{"model":"gpt-4o"}')
   })
+  it('requestDetail exposes tokensCacheWrite alongside tokensCached (spec §1.3 fresh/cached/written)', () => {
+    const pid = ensureProject(db, { key: 'path:/y', name: 'app2', rootPath: '/y', gitRoot: null })
+    insertRows(db, pid, [fakeRow({ tokensCacheWrite: 1024, tokensCached: 512 })], true)
+    const t = traces(db, { llm: true, limit: 100 })
+    const row = t.find((r) => r.project === 'app2')!
+    const d = requestDetail(db, row.id)
+    expect(d).not.toBeNull()
+    expect((d as any).tokensCacheWrite).toBe(1024)
+    expect((d as any).tokensCached).toBe(512)
+  })
   it('liveTail returns rows after id', () => {
     const all = traces(db, { llm: false, limit: 100 })
     expect(liveTail(db, 0).length).toBe(3)

@@ -7,7 +7,8 @@ import {
 import { theme, statusColor } from '../theme.js'
 import { G, visWidth, padCell } from '../glyphs.js'
 import { extractExchange, type Exchange } from '../llm-io.js'
-import { fmtUsd, fmtNum, fmtMs, fmtTime, fmtBytes, CACHE_MARK } from '../../format.js'
+import { tokenBreakdown, type TokenFacts } from '../token-block.js'
+import { fmtUsd, fmtNum, fmtMs, fmtTime, fmtBytes } from '../../format.js'
 import type { DisplayRow } from '../tree-model.js'
 
 /** The detail pane: one card per row type, chat-style for LLM turns (spec §3).
@@ -227,41 +228,19 @@ function statusSeg(status: number | null): Line {
 // Token block (spec §1.3)
 // ---------------------------------------------------------------------------
 
-interface TokenFacts {
-  tokensIn: number | null
-  tokensOut: number | null
-  tokensCached: number | null
-  tokensCacheWrite: number | null
-}
-
-/** ```
- *  tokens  46,802 → 846
- *    fresh   2
- *    cached  46,800 ↺ (99%)
- *    written 1,024
- *  ```
- *  A null line is omitted (nobody reported it); a zero line is SHOWN (somebody
- *  reported zero). That distinction is the whole point of the block. */
+/** Lays the shared fresh/cached/written breakdown (`../token-block.js`) out
+ *  as clipped, optional `Line`s — the card's own concerns (width, dimming,
+ *  which lines yield first when the pane is short) stay here; the numbers
+ *  themselves are computed once, in the module every screen shares. */
 function tokenBlock(n: TokenFacts, inner: number): Line[] {
-  const head = n.tokensIn == null && n.tokensOut == null
-    ? 'tokens  —'
-    : `tokens  ${n.tokensIn == null ? '—' : fmtNum(n.tokensIn)} → ${n.tokensOut == null ? '—' : fmtNum(n.tokensOut)}`
-  const out = [L(clip(head, inner))]
+  const b = tokenBreakdown(n)
+  const out = [L(clip(b.head, inner))]
   const sub = (label: string, value: string) =>
     L(clip(`  ${label.padEnd(8)}${value}`, inner), { dim: true, optional: true })
 
-  if (n.tokensIn != null && (n.tokensCached != null || n.tokensCacheWrite != null)) {
-    const fresh = Math.max(0, n.tokensIn - (n.tokensCached ?? 0) - (n.tokensCacheWrite ?? 0))
-    out.push(sub('fresh', fmtNum(fresh)))
-  }
-  if (n.tokensCached != null) {
-    const mark = n.tokensCached > 0 ? ` ${CACHE_MARK}` : ''
-    // Floored, not rounded: 99.6% cached must not read as "100% cached".
-    const pct = n.tokensIn != null && n.tokensIn > 0
-      ? ` (${Math.floor((n.tokensCached / n.tokensIn) * 100)}%)` : ''
-    out.push(sub('cached', `${fmtNum(n.tokensCached)}${mark}${pct}`))
-  }
-  if (n.tokensCacheWrite != null) out.push(sub('written', fmtNum(n.tokensCacheWrite)))
+  if (b.fresh != null) out.push(sub('fresh', b.fresh))
+  if (b.cached != null) out.push(sub('cached', b.cached))
+  if (b.written != null) out.push(sub('written', b.written))
   return out
 }
 

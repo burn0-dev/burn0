@@ -614,6 +614,7 @@ export function requestDetail(db: StorageDriver, id: number) {
     SELECT r.id, r.started_at AS startedAt, r.method, r.entity, r.provider,
            r.normalized_endpoint AS normalizedEndpoint, r.status, r.latency_ms AS latencyMs,
            r.model, r.tokens_in AS tokensIn, r.tokens_out AS tokensOut, r.tokens_cached AS tokensCached,
+           r.tokens_cache_write AS tokensCacheWrite,
            r.cost_usd AS costUsd, r.first_byte_ms AS firstByteMs,
            r.req_bytes AS reqBytes, r.res_bytes AS resBytes,
            r.url, r.tags, p.name AS project

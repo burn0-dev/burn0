@@ -4,8 +4,9 @@ import { query, type StorageDriver } from '@burn0/core'
 import { usePoll } from '../hooks.js'
 import { theme, statusColor } from '../theme.js'
 import { Section } from '../ui.js'
-import { extractPrompt, extractAnswer } from '../llm-io.js'
-import { fmtMs, fmtUsd, fmtNum } from '../../format.js'
+import { extractTranscript, type TranscriptEntry } from '../llm-io.js'
+import { tokenBreakdown } from '../token-block.js'
+import { fmtMs, fmtUsd, fmtBytes } from '../../format.js'
 
 const BODY_PREVIEW = 2000
 
@@ -58,38 +59,56 @@ export function DebugScreen({ db, requestId }: { db: StorageDriver; requestId: n
   )
 }
 
+/** The full conversation the payload carries, chat-style — single-pane users'
+ *  only chat surface, so unlike TraceDetail's capped card this renders EVERY
+ *  message in order and never clips an argument string; the screen already
+ *  scrolls. Visual language matches TraceDetail: dim uppercase role labels,
+ *  `→ tool(args…)` lines in the model color, and the shared fresh/cached/
+ *  written token block (spec §1.3) in place of the old ", N cached" phrasing. */
 function LlmIO({ d }: { d: any }) {
-  const prompt = extractPrompt(d.payload.reqBody)
-  const answer = extractAnswer(d.payload.resBody)
-  if (!prompt && !answer) return null
-  const tokens = d.tokensIn != null || d.tokensOut != null
+  const transcript = extractTranscript(d.payload.reqBody, d.payload.resBody)
+  if (transcript.length === 0) return null
+  const tok = tokenBreakdown({
+    tokensIn: d.tokensIn ?? null, tokensOut: d.tokensOut ?? null,
+    tokensCached: d.tokensCached ?? null, tokensCacheWrite: d.tokensCacheWrite ?? null,
+  })
+  const showTokens = d.tokensIn != null || d.tokensOut != null
   return (
-    <Box flexDirection="column">
-      {/* Stacked, not side by side: prompts and completions are prose, and
-          splitting the width halves the line length and doubles the wrapping.
-          Stacking also lets a long prompt scroll without dragging the response. */}
+    <Section title="LLM conversation">
       <Box flexDirection="column">
-        <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} marginTop={1}>
-          <Text bold color={theme.accent}>Input{d.tokensIn != null ? `  (${fmtNum(d.tokensIn)} tok${d.payload && detailCached(d)})` : ''}</Text>
-          <Text wrap="wrap">{prompt ?? '—'}</Text>
-        </Box>
-        <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} marginTop={1}>
-          <Text bold color={theme.accent}>Output{d.tokensOut != null ? `  (${fmtNum(d.tokensOut)} tok)` : ''}</Text>
-          <Text wrap="wrap">{answer ?? '—'}</Text>
-        </Box>
+        {transcript.map((entry, i) => <TranscriptEntryView key={i} entry={entry} />)}
       </Box>
-      {tokens && (
-        <Text dimColor>
-          {`  ${d.model} · ${fmtNum(d.tokensIn ?? 0)} in / ${fmtNum(d.tokensOut ?? 0)} out`}
-          {d.costUsd != null ? ` · ${fmtUsd(d.costUsd)}` : ''}
-        </Text>
+      {showTokens && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>{tok.head}</Text>
+          {tok.fresh != null && <Text dimColor>{`  fresh   ${tok.fresh}`}</Text>}
+          {tok.cached != null && <Text dimColor>{`  cached  ${tok.cached}`}</Text>}
+          {tok.written != null && <Text dimColor>{`  written ${tok.written}`}</Text>}
+          <Text dimColor>{`  ${d.model}${d.costUsd != null ? ` · ${fmtUsd(d.costUsd)}` : ''}`}</Text>
+        </Box>
       )}
-    </Box>
+    </Section>
   )
 }
 
-function detailCached(d: any): string {
-  return d.tokensCached ? `, ${fmtNum(d.tokensCached)} cached` : ''
+function TranscriptEntryView({ entry }: { entry: TranscriptEntry }) {
+  if (entry.role === 'tool') {
+    const r = entry.toolResult!
+    return (
+      <Text dimColor wrap="wrap">
+        {`TOOL RESULT ${r.isError ? '✗' : '✓'} ${r.name ?? '—'} · ${fmtBytes(r.bytes)}`}
+      </Text>
+    )
+  }
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text bold dimColor>{entry.role.toUpperCase()}</Text>
+      {entry.text != null && <Text wrap="wrap">{entry.text}</Text>}
+      {entry.toolCalls?.map((c, i) => (
+        <Text key={i} color={theme.model} wrap="wrap">{`→ ${c.name}(${c.args ?? ''})`}</Text>
+      ))}
+    </Box>
+  )
 }
 
 function pretty(jsonStr: string): string {

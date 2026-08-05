@@ -58,6 +58,137 @@ export function extractAnswer(resBody: string | null): string | null {
   return null
 }
 
+export interface TranscriptEntry {
+  role: string
+  text: string | null
+  toolCalls?: Array<{ name: string; args: string | null }>
+  toolResult?: { name: string | null; isError: boolean; bytes: number }
+}
+
+/** Every message the payload carries, in order — the full-text surface for
+ *  the payload screen (task 15). `extractExchange`'s "last user text" /
+ *  "final assistant turn" slices are the right shape for a fixed-height
+ *  detail card; this screen scrolls and has no other place for single-pane
+ *  users to read the whole conversation, so it walks every message instead
+ *  of picking one.
+ *
+ *  Built on the same request/response internals as `extractExchange` — no
+ *  parsing is duplicated here, only re-walked in message order. The response
+ *  side is never part of `reqBody`'s `messages[]`, so its turn is appended
+ *  last, independently, the same way `extractExchange.assistantText`/
+ *  `toolCalls` are independent of the request side. */
+export function extractTranscript(reqBody: string | null, resBody: string | null): TranscriptEntry[] {
+  const out: TranscriptEntry[] = []
+  if (reqBody != null) {
+    let body: any
+    try { body = JSON.parse(reqBody) } catch { body = null }
+    if (Array.isArray(body?.messages)) {
+      out.push(...messagesToTranscript(body, reqBody))
+    } else if (body != null) {
+      const text = requestFallbackText(body)
+      if (text) out.push({ role: 'user', text })
+    }
+  }
+  if (resBody != null) {
+    const res = extractResponse(resBody)
+    if (res.assistantText != null || res.toolCalls.length > 0) {
+      out.push({
+        role: 'assistant',
+        text: res.assistantText,
+        toolCalls: res.toolCalls.length ? res.toolCalls : undefined,
+      })
+    }
+  }
+  return out
+}
+
+/** Embeddings (`input`) / legacy completion (`prompt`) shaped bodies — same
+ *  fallback `extractRequest` uses for `lastUserText`, kept here as the one
+ *  other request shape worth a transcript entry. */
+function requestFallbackText(body: any): string | null {
+  if (typeof body?.input === 'string' || Array.isArray(body?.input)) return inputToText(body.input)
+  if (typeof body?.prompt === 'string') return body.prompt || null
+  return null
+}
+
+function messagesToTranscript(body: any, reqBody: string): TranscriptEntry[] {
+  const messages: any[] = body.messages
+  const out: TranscriptEntry[] = []
+  const toolNames = collectToolNames(messages)
+  // `parseToolResults` walks `messages` in this exact order, emitting one
+  // entry per role:'tool' message and one per tool_result content block —
+  // the same order this loop encounters them in, so consuming the flat list
+  // sequentially reproduces the original per-message grouping without
+  // re-deriving isError/bytes here.
+  const results = parseToolResults(reqBody)
+  let ri = 0
+
+  // System prompt: same precedence as `fromMessages` (top-level string, then
+  // top-level array, then a role:'system' message) — but shown as one
+  // compact entry (first line + char count), never the full text. The
+  // conversation itself gets the "full view"; a multi-KB system prompt does
+  // not need to repeat here to be honest about what the payload carries.
+  let systemIdx = -1
+  let systemText: string | null = null
+  if (typeof body.system === 'string') {
+    systemText = body.system
+  } else if (Array.isArray(body.system)) {
+    const text = blocksToText(body.system)
+    if (text) systemText = text
+  } else {
+    systemIdx = messages.findIndex((m) => m?.role === 'system')
+    if (systemIdx !== -1) systemText = contentToText(messages[systemIdx].content) ?? ''
+  }
+  if (systemText != null) {
+    out.push({ role: 'system', text: `${firstLine(systemText)}  (${systemText.length} chars)` })
+  }
+
+  messages.forEach((m, i) => {
+    if (i === systemIdx) return
+    if (m?.role === 'system') return // top-level system already shown once; skip a duplicate embedded copy
+
+    if (m?.role === 'assistant') {
+      const text = contentToText(m.content)
+      const calls = toolCallsFromMessage(m).map((c) => ({ name: c.name, args: c.args }))
+      if (text || calls.length) out.push({ role: 'assistant', text, toolCalls: calls.length ? calls : undefined })
+      return
+    }
+    if (m?.role === 'tool' && typeof m.tool_call_id === 'string') {
+      out.push(toolResultEntry(results[ri++], toolNames))
+      return
+    }
+    if (m?.role === 'user') {
+      const blocks = asArray(m.content)
+      const resultBlocks = blocks.filter((b: any) => b?.type === 'tool_result')
+      if (resultBlocks.length > 0) {
+        for (let k = 0; k < resultBlocks.length; k++) out.push(toolResultEntry(results[ri++], toolNames))
+        const text = blocksToText(blocks.filter((b: any) => b?.type !== 'tool_result'))
+        if (text) out.push({ role: 'user', text })
+        return
+      }
+      const text = contentToText(m.content)
+      if (text) out.push({ role: 'user', text })
+    }
+  })
+
+  return out
+}
+
+function toolResultEntry(
+  r: { id: string; result: string | null; isError: boolean } | undefined,
+  toolNames: Map<string, string>,
+): TranscriptEntry {
+  return {
+    role: 'tool',
+    text: null,
+    toolResult: {
+      name: r ? toolNames.get(r.id) ?? null : null,
+      isError: r?.isError ?? false,
+      bytes: Buffer.byteLength(r?.result ?? ''),
+    },
+  }
+}
+
 interface RequestExtract {
   ok: boolean
   msgCount: number
@@ -158,16 +289,33 @@ function collectToolNames(messages: any[]): Map<string, string> {
   const map = new Map<string, string>()
   for (const m of messages) {
     if (m?.role !== 'assistant') continue
-    for (const tc of asArray(m?.tool_calls)) {
-      if (typeof tc?.id === 'string' && typeof tc?.function?.name === 'string') map.set(tc.id, tc.function.name)
-    }
-    for (const block of asArray(m?.content)) {
-      if (block?.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
-        map.set(block.id, block.name)
-      }
-    }
+    for (const c of toolCallsFromMessage(m)) map.set(c.id, c.name)
   }
   return map
+}
+
+/** OpenAI `tool_calls` / Anthropic `tool_use` blocks declared by ONE assistant
+ *  message — the id+name+args a request-side turn carries. Not the same shape
+ *  core's `parseToolCalls` reads (that walks a whole *response* envelope,
+ *  `choices[0].message.tool_calls` / top-level `content[]`); this walks a bare
+ *  message object out of `messages[]`, which is the one thing neither
+ *  `collectToolNames` (id→name only) nor `parseToolCalls` (response-shaped)
+ *  already provides. `collectToolNames` and `extractTranscript`'s assistant
+ *  entries both build on this one extraction. */
+function toolCallsFromMessage(m: any): Array<{ id: string; name: string; args: string | null }> {
+  const out: Array<{ id: string; name: string; args: string | null }> = []
+  for (const tc of asArray(m?.tool_calls)) {
+    if (typeof tc?.id === 'string' && typeof tc?.function?.name === 'string') {
+      const args = tc.function.arguments
+      out.push({ id: tc.id, name: tc.function.name, args: typeof args === 'string' ? args : null })
+    }
+  }
+  for (const block of asArray(m?.content)) {
+    if (block?.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+      out.push({ id: block.id, name: block.name, args: block.input != null ? JSON.stringify(block.input) : null })
+    }
+  }
+  return out
 }
 
 /** Best-effort Gemini support: no top-level system slot, no tool parsing
