@@ -85,8 +85,8 @@ export function extractTranscript(reqBody: string | null, resBody: string | null
     if (Array.isArray(body?.messages)) {
       out.push(...messagesToTranscript(body, reqBody))
     } else if (body != null) {
-      const text = requestFallbackText(body)
-      if (text) out.push({ role: 'user', text })
+      const fb = resolveFallbackText(body)
+      if (fb?.text) out.push({ role: 'user', text: fb.text })
     }
   }
   if (resBody != null) {
@@ -102,15 +102,6 @@ export function extractTranscript(reqBody: string | null, resBody: string | null
   return out
 }
 
-/** Embeddings (`input`) / legacy completion (`prompt`) shaped bodies — same
- *  fallback `extractRequest` uses for `lastUserText`, kept here as the one
- *  other request shape worth a transcript entry. */
-function requestFallbackText(body: any): string | null {
-  if (typeof body?.input === 'string' || Array.isArray(body?.input)) return inputToText(body.input)
-  if (typeof body?.prompt === 'string') return body.prompt || null
-  return null
-}
-
 function messagesToTranscript(body: any, reqBody: string): TranscriptEntry[] {
   const messages: any[] = body.messages
   const out: TranscriptEntry[] = []
@@ -123,28 +114,17 @@ function messagesToTranscript(body: any, reqBody: string): TranscriptEntry[] {
   const results = parseToolResults(reqBody)
   let ri = 0
 
-  // System prompt: same precedence as `fromMessages` (top-level string, then
-  // top-level array, then a role:'system' message) — but shown as one
-  // compact entry (first line + char count), never the full text. The
-  // conversation itself gets the "full view"; a multi-KB system prompt does
-  // not need to repeat here to be honest about what the payload carries.
-  let systemIdx = -1
-  let systemText: string | null = null
-  if (typeof body.system === 'string') {
-    systemText = body.system
-  } else if (Array.isArray(body.system)) {
-    const text = blocksToText(body.system)
-    if (text) systemText = text
-  } else {
-    systemIdx = messages.findIndex((m) => m?.role === 'system')
-    if (systemIdx !== -1) systemText = contentToText(messages[systemIdx].content) ?? ''
-  }
-  if (systemText != null) {
-    out.push({ role: 'system', text: `${firstLine(systemText)}  (${systemText.length} chars)` })
+  // System prompt: shown as one compact entry (first line + char count),
+  // never the full text — the conversation itself gets the "full view", a
+  // multi-KB system prompt does not need to repeat here to be honest about
+  // what the payload carries.
+  const sys = resolveSystemPrompt(body, messages)
+  if (sys.text != null) {
+    out.push({ role: 'system', text: `${sys.firstLine}  (${sys.chars} chars)` })
   }
 
   messages.forEach((m, i) => {
-    if (i === systemIdx) return
+    if (i === sys.embeddedIdx) return
     if (m?.role === 'system') return // top-level system already shown once; skip a duplicate embedded copy
 
     if (m?.role === 'assistant') {
@@ -211,14 +191,25 @@ function extractRequest(reqBody: string | null): RequestExtract {
 
   if (Array.isArray(body?.messages)) return fromMessages(body, reqBody)
   if (Array.isArray(body?.contents)) return fromGeminiContents(body)
-  if (typeof body?.input === 'string' || Array.isArray(body?.input)) {
-    const text = inputToText(body.input)
-    return { ...empty, lastUserText: text, msgCount: 1, earlierCount: text ? 0 : 1 }
-  }
-  if (typeof body?.prompt === 'string') {
-    return { ...empty, lastUserText: body.prompt, msgCount: 1, earlierCount: 0 }
-  }
+  const fb = resolveFallbackText(body)
+  if (fb?.shape === 'input') return { ...empty, lastUserText: fb.text, msgCount: 1, earlierCount: fb.text ? 0 : 1 }
+  if (fb?.shape === 'prompt') return { ...empty, lastUserText: fb.text, msgCount: 1, earlierCount: 0 }
   return empty
+}
+
+/** Embeddings (`input`) / legacy completion (`prompt`) shaped bodies — the one
+ *  other request shape (besides `messages[]`) worth extracting text from.
+ *  Shared by `extractRequest` (feeds `Exchange.lastUserText`) and
+ *  `extractTranscript`'s fallback path; each applies its own handling of an
+ *  empty result on top — unchanged from before this was factored out:
+ *  `extractRequest`'s `prompt` branch has always kept a raw `''`, its `input`
+ *  branch (via `inputToText`) has always collapsed one to `null`. Returning
+ *  the shape tag alongside the text is what lets `extractRequest` keep that
+ *  distinction without re-deriving it. */
+function resolveFallbackText(body: any): { shape: 'input' | 'prompt'; text: string | null } | null {
+  if (typeof body?.input === 'string' || Array.isArray(body?.input)) return { shape: 'input', text: inputToText(body.input) }
+  if (typeof body?.prompt === 'string') return { shape: 'prompt', text: body.prompt }
+  return null
 }
 
 function fromMessages(body: any, reqBody: string): RequestExtract {
@@ -227,24 +218,12 @@ function fromMessages(body: any, reqBody: string): RequestExtract {
   const consumed = new Set<number>()
 
   // System prompt: Anthropic carries it top-level (doesn't occupy a messages[]
-  // slot); OpenAI-style embeds a role:'system' message (does).
-  let systemFirstLine: string | null = null
-  let systemChars = 0
-  if (typeof body.system === 'string') {
-    systemChars = body.system.length
-    systemFirstLine = firstLine(body.system)
-  } else if (Array.isArray(body.system)) {
-    const text = blocksToText(body.system)
-    if (text) { systemChars = text.length; systemFirstLine = firstLine(text) }
-  } else {
-    const idx = messages.findIndex((m) => m?.role === 'system')
-    if (idx !== -1) {
-      const text = contentToText(messages[idx].content) ?? ''
-      systemChars = text.length
-      systemFirstLine = firstLine(text)
-      consumed.add(idx)
-    }
-  }
+  // slot); OpenAI-style embeds a role:'system' message (does, so its index
+  // goes into `consumed`).
+  const sys = resolveSystemPrompt(body, messages)
+  const systemFirstLine = sys.firstLine
+  const systemChars = sys.chars
+  if (sys.embeddedIdx != null) consumed.add(sys.embeddedIdx)
 
   // Last real user text: scan backward for a user-role message whose content
   // resolves to non-empty text. Anthropic tool_result carriers are also
@@ -283,6 +262,42 @@ function fromMessages(body: any, reqBody: string): RequestExtract {
     lastUserText,
     toolResults,
   }
+}
+
+interface SystemPrompt {
+  /** Full system text, or null when there is no system prompt at all. A
+   *  present-but-empty string (`system: ""`) is NOT null — it's still
+   *  "reported", just empty — so callers that key presence off `!= null`
+   *  (both current ones do) see it. */
+  text: string | null
+  firstLine: string | null
+  chars: number
+  /** The `messages[]` index this consumed, or null when the system prompt
+   *  arrived top-level (Anthropic) and never occupied a slot, or wasn't
+   *  found at all. */
+  embeddedIdx: number | null
+}
+
+const NO_SYSTEM: SystemPrompt = { text: null, firstLine: null, chars: 0, embeddedIdx: null }
+
+/** System prompt resolution, one precedence chain shared by `fromMessages`
+ *  (feeds `Exchange.systemFirstLine`/`systemChars`) and
+ *  `messagesToTranscript` (feeds the transcript's compact system entry):
+ *  top-level `body.system` string → top-level `body.system` array of content
+ *  blocks (Anthropic) → the first `role:'system'` message in `messages[]`
+ *  (OpenAI, which is why only that branch reports an `embeddedIdx`). */
+function resolveSystemPrompt(body: any, messages: any[]): SystemPrompt {
+  if (typeof body.system === 'string') {
+    return { text: body.system, firstLine: firstLine(body.system), chars: body.system.length, embeddedIdx: null }
+  }
+  if (Array.isArray(body.system)) {
+    const text = blocksToText(body.system)
+    return text ? { text, firstLine: firstLine(text), chars: text.length, embeddedIdx: null } : NO_SYSTEM
+  }
+  const idx = messages.findIndex((m) => m?.role === 'system')
+  if (idx === -1) return NO_SYSTEM
+  const text = contentToText(messages[idx].content) ?? ''
+  return { text, firstLine: firstLine(text), chars: text.length, embeddedIdx: idx }
 }
 
 function collectToolNames(messages: any[]): Map<string, string> {
