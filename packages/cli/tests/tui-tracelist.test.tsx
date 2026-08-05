@@ -82,6 +82,23 @@ describe('TraceListScreen', () => {
     expect(f).toContain('2.1s')
   })
 
+  it('shows an unreported token side as — in the rolled-up row, never as 0', async () => {
+    // One output-only LLM call: the leaf renders `—→846`, so the trace row it
+    // rolls into must too (spec §1.3 — a rollup may not invent a zero).
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'burn0-tl-null-')), 'burn0.db'))
+    const projectId = ensureProject(db, { key: 'path:/z', name: 'app', rootPath: '/z', gitRoot: null })
+    const runId = insertRun(db, { projectId, service: null, pid: 1, entry: null, nodeVersion: null })
+    createWriter(db, { projectId, runId, service: null, capturePayloads: false }).write(
+      { opened: [trace({ localId: 1, name: 'POST /api/chat' })], closed: [] },
+      [llm({ startedAt: T0 + 10, trace: { localId: 1, seq: 0 }, tokensIn: null, tokensOut: 846 })],
+    )
+    const { lastFrame } = render(<TraceListScreen db={db} onOpenRequest={noop} />)
+    await tick()
+    const f = lastFrame()!
+    expect(f).toContain('— → 846')
+    expect(f).not.toContain('0 → 846')
+  })
+
   it('opens a trace and shows its calls nested under it', async () => {
     const { db } = seeded()
     const { lastFrame, stdin } = render(<TraceListScreen db={db} onOpenRequest={noop} />)

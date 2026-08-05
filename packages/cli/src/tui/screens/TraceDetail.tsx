@@ -68,7 +68,7 @@ const DAY_MS = 86_400_000
  *  recorded per row, and the sweep that deleted the payload ran under the
  *  reader's rules anyway. */
 let cachedRetention: { payloads: number; metadata: number } | null = null
-function readerRetention(): { payloads: number; metadata: number } {
+export function readerRetention(): { payloads: number; metadata: number } {
   if (cachedRetention == null) {
     try { cachedRetention = loadConfig(process.cwd()).retentionDays } catch { cachedRetention = { payloads: 7, metadata: 30 } }
   }
@@ -301,7 +301,7 @@ type Retention = { payloads: number; metadata: number }
  *  there is, so it is what the wording keys on. `what` is per-card on purpose:
  *  an LLM row lost a conversation, an API row lost a request and a response,
  *  a tool row lost its args and result. */
-function missingPayloadLines(
+export function missingPayloadLines(
   what: string, startedAt: number, r: Retention, inner: number, now: number,
 ): Line[] {
   // These strings are the state's definition, so they wrap rather than clip —
@@ -626,7 +626,9 @@ function traceCard(o: {
     // Facts so far, not a verdict — the strip above already shows the
     // aggregates rolled up over whatever ran before `now`; this line is only
     // the "still going" fact those numbers don't say on their own.
-    const elapsed = Math.max(0, Math.round((now - node.startedAt) / 1000))
+    // FLOORED, matching the tree's own elapsed cell — the two panes must not
+    // disagree about what second it is (final-review F12).
+    const elapsed = Math.max(0, Math.floor((now - node.startedAt) / 1000))
     out.push(L(clip(`${G.live} LIVE — started ${fmtTime(node.startedAt)}, ${elapsed}s ago`, inner), { color: theme.accent }))
   } else if (node.status == null && !node.incomplete) {
     // The known-unknown story is "not observed" (closed, no status) OR
@@ -675,17 +677,23 @@ function traceCard(o: {
     // A partial sum without the caveat is a wrong number presented as fact.
     out.push(L(clip(`(excludes ${fmtNum(expired)} expired call${expired === 1 ? '' : 's'})`, inner), { dim: true }))
   }
-  if (node.tokenCalls > 0 || node.tokensIn != null) out.push(...tokenBlock(node, inner))
+  // tokenCalls alone gates the block: `tokensIn != null` was vacuous while the
+  // query collapsed unknown to 0, and wrong once it stopped — a zero-LLM trace
+  // has no token fact to state (never `tokens 0 → 0`).
+  if (node.tokenCalls > 0) out.push(...tokenBlock(node, inner))
 
+  // Elaboration is `optional`: under a short terminal these shed before the
+  // tail truncates, so the `issues` line — the reason the user opened the
+  // trace — survives them (final-review F5; fitCard's contract).
   const composition = compositionLine(reqs, tools)
-  if (composition) out.push(...wrapOn(composition, ' · ', inner).map((t) => L(t, { dim: true })))
+  if (composition) out.push(...wrapOn(composition, ' · ', inner).map((t) => L(t, { dim: true, optional: true })))
 
   const slowest = reqs.filter((n) => n.durationMs != null)
     .sort((a, b) => (b.durationMs ?? 0) - (a.durationMs ?? 0))[0]
-  if (slowest) out.push(L(clip(`${'slowest'.padEnd(10)}${nameOf(slowest)} · ${fmtMs(slowest.durationMs)}`, inner), { dim: true }))
+  if (slowest) out.push(L(clip(`${'slowest'.padEnd(10)}${nameOf(slowest)} · ${fmtMs(slowest.durationMs)}`, inner), { dim: true, optional: true }))
   const costliest = reqs.filter((n) => n.costUsd != null)
     .sort((a, b) => (b.costUsd ?? 0) - (a.costUsd ?? 0))[0]
-  if (costliest) out.push(L(clip(`${'costliest'.padEnd(10)}${nameOf(costliest)} · ${fmtUsd(costliest.costUsd)}`, inner), { dim: true }))
+  if (costliest) out.push(L(clip(`${'costliest'.padEnd(10)}${nameOf(costliest)} · ${fmtUsd(costliest.costUsd)}`, inner), { dim: true, optional: true }))
 
   const issues = issueParts(reqs, tools, node)
   if (issues.length > 0) {
@@ -893,7 +901,7 @@ export function TraceDetail({ row, nodes = [], db, width, height, retention, now
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} width={width}>
-      {fitCard(lines, content).map((l, i) => <LineView key={i} line={l} inner={inner} />)}
+      {fitCard(lines, content, requestId != null).map((l, i) => <LineView key={i} line={l} inner={inner} />)}
     </Box>
   )
 }
@@ -906,7 +914,7 @@ export function TraceDetail({ row, nodes = [], db, width, height, retention, now
  *  Elaboration goes first, from the bottom up: losing `written 0` costs a
  *  detail, losing the `issues` line costs the reason the user opened the trace.
  *  Only then does the tail truncate, and what it dropped is stated. */
-function fitCard(lines: Line[], budget: number): Line[] {
+function fitCard(lines: Line[], budget: number, hasPayload = false): Line[] {
   if (lines.length <= budget) return lines
   const kept = [...lines]
   for (let i = kept.length - 1; i >= 0 && kept.length > budget; i--) {
@@ -914,9 +922,13 @@ function fitCard(lines: Line[], budget: number): Line[] {
   }
   if (kept.length <= budget) return kept
   if (budget <= 1) return kept.slice(0, Math.max(0, budget))
+  // The ⏎ hint only where ⏎ actually opens something — on a trace root or
+  // fold row the key is a toggle/no-op, and instructing a dead action is a
+  // small lie (final-review F6).
+  const hint = hasPayload ? ' · ⏎ opens the payload' : ''
   return [
     ...kept.slice(0, budget - 1),
-    L(`+${kept.length - (budget - 1)} more lines · ⏎ opens the payload`, { dim: true }),
+    L(`+${kept.length - (budget - 1)} more lines${hint}`, { dim: true }),
   ]
 }
 

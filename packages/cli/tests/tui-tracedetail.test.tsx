@@ -484,6 +484,60 @@ describe('TraceDetail — trace root card', () => {
     const { rows, nodes } = viewOf(db, rootId)
     expect(frame(rows[0], db, nodes)).toContain('(excludes 9 expired calls)')
   })
+
+  it('omits the token line entirely on a trace that never spoke to a model', () => {
+    // Nothing in this trace reported tokens, so there is no token fact to
+    // state — `tokens  0 → 0` would be a number nobody measured.
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'burn0-td-notok-')), 'burn0.db'))
+    const projectId = ensureProject(db, { key: 'path:/nt', name: 'app', rootPath: '/nt', gitRoot: null })
+    const runId = insertRun(db, { projectId, service: null, pid: 1, entry: null, nodeVersion: null })
+    createWriter(db, { projectId, runId, service: null, capturePayloads: false }).write({
+      opened: [{ localId: 1, parentLocalId: null, name: ROOT_LABEL, kind: 'http-server',
+        startedAt: T0, endedAt: T0 + 900, status: 200, incomplete: false }],
+      closed: [],
+    }, [baseRow({
+      trace: { localId: 1, seq: 0 }, startedAt: T0 + 10, latencyMs: 40, method: 'GET',
+      hostname: 'api.pinecone.io', normalizedEndpoint: '/query', url: 'https://api.pinecone.io/query',
+      entity: 'Pinecone', entityClass: 'general', provider: null, model: null,
+      tokensIn: null, tokensOut: null, tokensCached: null, tokensCacheWrite: null, costUsd: null,
+      status: 200,
+    })])
+    const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id as number
+    const { rows, nodes } = viewOf(db, rootId)
+    const f = frame(rows[0], db, nodes)
+    expect(f).not.toContain('tokens')
+    expect(f).not.toContain('0 → 0')
+  })
+})
+
+describe('TraceDetail — card priorities under a short terminal (spec §3)', () => {
+  // 24 rows: B = max(12, 24 − 12) = 12, content C = 7 — fewer lines than the
+  // root card wants, so something must yield. The comment on `fitCard` names
+  // what: elaboration first, and `issues` is never elaboration.
+  const SHORT = 24
+
+  it('sheds composition/slowest/costliest before the issues line', () => {
+    const { db, rootId } = seedTrace()
+    const { rows, nodes } = viewOf(db, rootId)
+    const f = frame(rows[0], db, nodes, 60, SHORT)
+    expect(f).toContain('issues')
+    expect(f).not.toContain('slowest')
+    expect(f).not.toContain('costliest')
+  })
+
+  it('offers ⏎ only on a row that actually has a payload to open', () => {
+    const { db, rootId } = seedTrace()
+    const { rows, nodes } = viewOf(db, rootId)
+    // The root is a trace, not a request — there is no payload behind ⏎, so
+    // the hint must never appear on it (whether or not the card truncates;
+    // with elaboration marked optional it usually fits outright now).
+    const root = frame(rows[0], db, nodes, 60, SHORT)
+    expect(root).not.toContain('⏎ opens the payload')
+    expect(root).toContain('issues')
+    // A request row does have one, and says so.
+    const api = frame(apiRow(rows, 'A_SalesOrder'), db, nodes, 60, SHORT)
+    expect(api).toContain('⏎ opens the payload')
+  })
 })
 
 describe('TraceDetail — trace root card: live and incomplete (task 16, spec §4)', () => {
@@ -506,6 +560,9 @@ describe('TraceDetail — trace root card: live and incomplete (task 16, spec §
     const now = T0 + 42_000
     const f = frame(rows[0], db, nodes, 60, 40, now)
     expect(f).toContain(`${'●'} LIVE — started ${fmtTime(T0)}, 42s ago`)
+    // FLOORED, like the tree's own `14s…` cell: at 14.9s the two panes must
+    // not disagree about what second it is.
+    expect(frame(rows[0], db, nodes, 60, 40, T0 + 14_900)).toContain('14s ago')
     // still a known-unknown status, not a failure — no "not observed" wording
     // while it's live, that's the CLOSED-null-status story, not this one
     expect(f).not.toContain('not observed')

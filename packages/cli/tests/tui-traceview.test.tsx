@@ -258,6 +258,56 @@ describe('TraceView (tree-model)', () => {
     expect(lastFrame()).toContain('12× GET')
   })
 
+  it('h in flat mode leaves a row selected — never a key flat mode does not render', async () => {
+    const { db, rootId } = seedReferenceLikeTrace()
+    const { lastFrame, stdin } = render(
+      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+    await tick()
+    stdin.write('f'); await tick()
+    // Walk to a request that lives under a TOOL in the tree. Flat mode renders
+    // no tool rows, so its structural parent key is not on screen. The walk is
+    // self-locating (left-truncation may elide the marker from most tails):
+    // stop when the selected row's name shows in BOTH panes.
+    let landed = false
+    for (let i = 0; i < 30 && !landed; i++) {
+      stdin.write(DOWN); await tick(5)
+      landed = occurrences(lastFrame()!, 'A_SalesOrder') > 1
+    }
+    expect(landed).toBe(true)
+
+    // h's structural parent is a tool key flat mode never renders, so the fix
+    // makes the press a NO-OP: selection, scroll and detail card all hold.
+    // (Pre-fix, the cursor pointed at a key no row carries — nothing selected,
+    // detail pane fell back to the root card until the next poll.)
+    const before = lastFrame()!
+    stdin.write('h'); await tick()
+    expect(lastFrame()!).toBe(before)
+  })
+
+  it('rolls an unreported token side up as — in the root row, never as 0', async () => {
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'burn0-tv-null-')), 'burn0.db'))
+    const projectId = ensureProject(db, { key: 'path:/n', name: 'app', rootPath: '/n', gitRoot: null })
+    const runId = insertRun(db, { projectId, service: null, pid: 1, entry: null, nodeVersion: null })
+    createWriter(db, { projectId, runId, service: null, capturePayloads: false }).write({
+      opened: [{ localId: 1, parentLocalId: null, name: ROOT_LABEL, kind: 'http-server',
+        startedAt: T0, endedAt: T0 + 900, status: 200, incomplete: false }],
+      closed: [],
+    }, [baseRow({
+      trace: { localId: 1, seq: 0 }, startedAt: T0 + 10, latencyMs: 400, method: 'POST',
+      hostname: LLM_HOST, normalizedEndpoint: '/v1/messages', entityClass: 'llm',
+      provider: null, model: MODEL, status: 200,
+      tokensIn: null, tokensOut: 846, tokensCached: null, tokensCacheWrite: null, costUsd: null,
+    })])
+    const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
+    const { lastFrame } = render(
+      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+    await tick()
+    const f = lastFrame()!
+    // Leaf and root must agree: the input side was never reported.
+    expect(occurrences(f, '—→846')).toBe(2)
+    expect(f).not.toContain('0→846')
+  })
+
   it('pruned trace renders the pruned message, not the expired one', async () => {
     const { db } = seedDb()
     const { lastFrame } = render(

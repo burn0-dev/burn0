@@ -21,10 +21,13 @@ export function baseRow(over: Partial<EnrichedRow> = {}): EnrichedRow {
   }
 }
 
-export function seedDb(rows: Partial<EnrichedRow>[] = [{}]): { db: StorageDriver; dbPath: string } {
+export function seedDb(
+  rows: Partial<EnrichedRow>[] = [{}],
+  o: { capturePayloads?: boolean } = {},
+): { db: StorageDriver; dbPath: string } {
   const dbPath = join(mkdtempSync(join(tmpdir(), 'burn0-cli-')), 'burn0.db')
   const db = openDatabase(dbPath)
   const pid = ensureProject(db, { key: 'path:/x', name: 'test-app', rootPath: '/x', gitRoot: null })
-  insertRows(db, pid, rows.map(baseRow), true)
+  insertRows(db, pid, rows.map(baseRow), o.capturePayloads !== false)
   return { db, dbPath }
 }

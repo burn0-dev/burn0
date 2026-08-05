@@ -293,8 +293,10 @@ export interface TraceListRow {
   calls: number
   costUsd: number
   pricedCalls: number
-  tokensIn: number
-  tokensOut: number
+  /** Sums over the trace's requests; null iff NO request reported that side —
+   *  a rollup must render `—` exactly where its leaves do, never invent a 0. */
+  tokensIn: number | null
+  tokensOut: number | null
   tokenCalls: number
   /** Sum of cache-read tokens over the trace's requests. null iff none of them
    *  reported cache info — distinct from "0 cached", which TraceList's `↺`
@@ -319,8 +321,8 @@ export function traceList(db: StorageDriver, opts: {
            COUNT(rq.id) calls,
            COALESCE(SUM(rq.cost_usd),0) costUsd,
            COALESCE(SUM(CASE WHEN rq.cost_usd IS NOT NULL THEN 1 ELSE 0 END),0) pricedCalls,
-           COALESCE(SUM(rq.tokens_in),0) tokensIn,
-           COALESCE(SUM(rq.tokens_out),0) tokensOut,
+           SUM(rq.tokens_in) tokensIn,
+           SUM(rq.tokens_out) tokensOut,
            COALESCE(SUM(CASE WHEN rq.tokens_in IS NOT NULL OR rq.tokens_out IS NOT NULL THEN 1 ELSE 0 END),0) tokenCalls,
            SUM(rq.tokens_cached) tokensCached
     FROM traces rt
@@ -492,7 +494,8 @@ export function traceTree(
   // the same null-vs-0 distinction §1.3 requires at the leaf (a rollup that
   // can't tell "nothing reported" from "reported zero" must never imply either).
   interface Stats {
-    calls: number; costUsd: number; priced: number; tin: number; tout: number; tokenCalls: number
+    calls: number; costUsd: number; priced: number; tokenCalls: number
+    tin: number; tinKnown: boolean; tout: number; toutKnown: boolean
     tcached: number; tcachedKnown: boolean; tcw: number; tcwKnown: boolean
   }
   const subtreeStats = (id: number): Stats => {
@@ -501,8 +504,13 @@ export function traceTree(
       calls: own.length,
       costUsd: own.reduce((s, r) => s + (r.costUsd ?? 0), 0),
       priced: own.filter((r) => r.costUsd != null).length,
+      // Every token sum carries a "known" flag: a rollup over rows that never
+      // reported a side must say null, not manufacture the 0 the leaf refuses
+      // to show (spec §1.3 — the leaf renders `—→846`, so must the root).
       tin: own.reduce((s, r) => s + (r.tokensIn ?? 0), 0),
+      tinKnown: own.some((r) => r.tokensIn != null),
       tout: own.reduce((s, r) => s + (r.tokensOut ?? 0), 0),
+      toutKnown: own.some((r) => r.tokensOut != null),
       tokenCalls: own.filter((r) => r.tokensIn != null || r.tokensOut != null).length,
       tcached: own.reduce((s, r) => s + (r.tokensCached ?? 0), 0),
       tcachedKnown: own.some((r) => r.tokensCached != null),
@@ -512,7 +520,9 @@ export function traceTree(
     for (const child of traces.filter((t) => t.parentId === id)) {
       const c = subtreeStats(child.id)
       acc.calls += c.calls; acc.costUsd += c.costUsd; acc.priced += c.priced
-      acc.tin += c.tin; acc.tout += c.tout; acc.tokenCalls += c.tokenCalls
+      acc.tin += c.tin; acc.tinKnown = acc.tinKnown || c.tinKnown
+      acc.tout += c.tout; acc.toutKnown = acc.toutKnown || c.toutKnown
+      acc.tokenCalls += c.tokenCalls
       acc.tcached += c.tcached; acc.tcachedKnown = acc.tcachedKnown || c.tcachedKnown
       acc.tcw += c.tcw; acc.tcwKnown = acc.tcwKnown || c.tcwKnown
     }
@@ -531,7 +541,8 @@ export function traceTree(
       durationMs: t.incomplete === 1 ? null : (t.endedAt != null ? t.endedAt - t.startedAt : null),
       status: t.status,
       costUsd: stats.costUsd, pricedCalls: stats.priced,
-      tokensIn: stats.tin, tokensOut: stats.tout,
+      tokensIn: stats.tinKnown ? stats.tin : null,
+      tokensOut: stats.toutKnown ? stats.tout : null,
       tokensCached: stats.tcachedKnown ? stats.tcached : null,
       tokensCacheWrite: stats.tcwKnown ? stats.tcw : null,
       tokenCalls: stats.tokenCalls,

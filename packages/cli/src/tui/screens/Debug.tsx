@@ -1,23 +1,37 @@
 import React from 'react'
 import { Box, Text } from 'ink'
-import { query, type StorageDriver } from '@burn0/core'
+import { query, redactQueryString, type StorageDriver } from '@burn0/core'
 import { usePoll } from '../hooks.js'
 import { theme, statusColor } from '../theme.js'
 import { Section } from '../ui.js'
 import { extractTranscript, type TranscriptEntry } from '../llm-io.js'
 import { tokenBreakdown } from '../token-block.js'
+import { missingPayloadLines, readerRetention } from './TraceDetail.js'
 import { fmtMs, fmtUsd, fmtBytes } from '../../format.js'
 
 const BODY_PREVIEW = 2000
 
-export function DebugScreen({ db, requestId }: { db: StorageDriver; requestId: number | null }) {
+/** The title prints the full URL — after the same secret-pattern redaction the
+ *  detail pane applies. This screen is one ⏎ from every tree row; an API key in
+ *  a query string must not survive to a screenshot (final-review F4). */
+function redactedUrl(url: string): string {
+  const q = url.indexOf('?')
+  if (q < 0) return url
+  return `${url.slice(0, q)}?${redactQueryString(url.slice(q + 1))}`
+}
+
+export function DebugScreen({ db, requestId, retention, now }: {
+  db: StorageDriver; requestId: number | null
+  /** Test seams; production falls back to the reader's own config + clock. */
+  retention?: { payloads: number; metadata: number }; now?: number
+}) {
   const detail = usePoll(() => (requestId == null ? null : query.requestDetail(db, requestId)))
   if (requestId == null || !detail) return <Text dimColor>Select a request from LLM, API, or Network (enter) to inspect it.</Text>
 
   const d: any = detail
   return (
     <Box flexDirection="column">
-      <Text bold color={theme.accent} wrap="truncate">{`${d.method} ${d.url}`}</Text>
+      <Text bold color={theme.accent} wrap="truncate">{`${d.method} ${redactedUrl(d.url)}`}</Text>
       <Text wrap="truncate">
         <Text>status </Text>
         <Text color={statusColor(d.status)}>{String(d.status ?? 'ERR')}</Text>
@@ -53,7 +67,18 @@ export function DebugScreen({ db, requestId }: { db: StorageDriver; requestId: n
           )}
         </Box>
       ) : (
-        <Text dimColor>Payload expired (7-day retention) — metadata only.</Text>
+        // Never the hardcoded expiry claim: a 10-second-old row with
+        // capturePayloads:false lost nothing, and "expired" would be a false
+        // data-loss report. Same age-vs-retention discrimination, same
+        // wording, as the detail pane (final-review F3).
+        <Box flexDirection="column">
+          {missingPayloadLines(
+            d.model ? 'conversation' : 'request & response',
+            d.startedAt, retention ?? readerRetention(), 78, now ?? Date.now(),
+          ).map((l, i) => (
+            <Text key={i} dimColor={l.dim} color={l.color} wrap="truncate">{l.text}</Text>
+          ))}
+        </Box>
       )}
     </Box>
   )

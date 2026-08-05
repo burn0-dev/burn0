@@ -10,10 +10,10 @@ import { TraceView } from '../src/tui/screens/TraceView.js'
 const [dbPath, idArg, colsArg] = process.argv.slice(2)
 const db = openDatabase(dbPath)
 const traceId = idArg ? Number(idArg)
-  : (query.traceList(db, { projectIds: null, services: null }, {})[0]?.id ?? 0)
+  : (query.traceList(db, {})[0]?.id ?? 0)
 const { lastFrame } = render(
   <TraceView db={db} traceId={traceId} columns={Number(colsArg ?? 140)}
-    onBack={() => {}} onOpenRequest={() => {}} />)
+    onBack={() => {}} />)
 await new Promise((r) => setTimeout(r, 150))
 console.log(lastFrame())
 process.exit(0)

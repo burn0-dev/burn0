@@ -88,6 +88,21 @@ describe('traceList', () => {
     expect(rows[0].steps).toBe('◇◆◆')
   })
 
+  it('rolls an unreported token side up as null, never as 0 (spec §1.3)', () => {
+    const w = writer()
+    w.write({
+      opened: [trace({ localId: 1, name: 'POST /api/chat' })],
+      closed: [],
+    }, [llm({ startedAt: T0 + 10, trace: { localId: 1, seq: 0 }, tokensIn: null, tokensOut: 846 })])
+
+    const [row] = traceList(db, { now })
+    // The leaf renders `—→846`; a rollup that says `0→846` invents a fact the
+    // provider never reported.
+    expect(row.tokensIn).toBeNull()
+    expect(row.tokensOut).toBe(846)
+    expect(row.tokenCalls).toBe(1)
+  })
+
   it('renders an unpriced trace as a gap, not as free', () => {
     const w = writer()
     w.write({ opened: [trace({ localId: 1, name: 'GET /health' })], closed: [] },
@@ -201,6 +216,39 @@ describe('traceTree', () => {
     expect(nodes[1].costUsd).toBeCloseTo(0.01, 6)   // child: only its own
     expect(nodes[0].calls).toBe(2)
     expect(nodes[1].calls).toBe(1)
+  })
+
+  it('rolls an unreported token side up as null, never as 0 (spec §1.3)', () => {
+    const w = writer()
+    w.write({
+      opened: [
+        trace({ localId: 1, name: 'root' }),
+        trace({ localId: 2, parentLocalId: 1, name: 'child', kind: 'explicit' }),
+      ],
+      closed: [],
+    }, [llm({ startedAt: T0 + 10, trace: { localId: 2, seq: 0 }, tokensIn: null, tokensOut: 846 })])
+    const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
+    const { nodes } = traceTree(db, rootId)!
+
+    // The leaf renders `—→846`; the root must say the same thing rather than
+    // manufacture a `0` no provider reported.
+    expect(nodes[0].tokensIn).toBeNull()
+    expect(nodes[0].tokensOut).toBe(846)
+    expect(nodes[1].tokensIn).toBeNull()
+    expect(nodes[1].tokensOut).toBe(846)
+    expect(nodes[0].tokenCalls).toBe(1)
+  })
+
+  it('sums the side that WAS reported across a subtree, and only that side', () => {
+    const w = writer()
+    w.write({ opened: [trace({ localId: 1, name: 'root' })], closed: [] }, [
+      llm({ startedAt: T0 + 10, trace: { localId: 1, seq: 0 }, tokensIn: null, tokensOut: 846 }),
+      llm({ startedAt: T0 + 20, trace: { localId: 1, seq: 1 }, tokensIn: 1200, tokensOut: 100 }),
+    ])
+    const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
+    const { nodes } = traceTree(db, rootId)!
+    expect(nodes[0].tokensIn).toBe(1200)
+    expect(nodes[0].tokensOut).toBe(946)
   })
 
   it('renders a trace whose children were pruned as empty rather than erroring', () => {

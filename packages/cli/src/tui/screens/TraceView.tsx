@@ -185,8 +185,11 @@ export function TraceView({ db, traceId, columns: forced, now: forcedNow, onBack
       if (row.isBranch && isBranchOpen(row, rows, at, nodes, expanded, collapsed)) {
         closeRow(row.key)
       } else {
+        // Only jump to a parent the current mode actually renders — flat mode
+        // has no structure rows, so a structural parent key would deselect
+        // everything until the next poll (final-review F7).
         const pk = parentKeyOf(row, nodes)
-        if (pk != null) setCursorKey(pk)
+        if (pk != null && rows.some((r) => r.key === pk)) setCursorKey(pk)
       }
       return
     }
