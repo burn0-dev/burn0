@@ -19,6 +19,10 @@ const DOWN = '\u001B[B'
 
 const noop = () => {}
 
+/** The detail pane repeats the selected row's identity, so "the cursor is on X"
+ *  is observable as X appearing twice — once in the tree, once in the card. */
+const occurrences = (frame: string, needle: string) => frame.split(needle).length - 1
+
 const T0 = 1_770_000_000_000
 const SAP_HOST = 'my-tenant.s4hanacloud.sap.com'
 const LLM_HOST = 'api.anthropic.com'
@@ -203,8 +207,9 @@ describe('TraceView (tree-model)', () => {
     stdin.write(DOWN); await tick()
     stdin.write(DOWN); await tick()
     stdin.write(DOWN); await tick()
-    expect(lastFrame()).toContain('tool'.padEnd(10) + 'ok')   // Detail pane: a tool is selected
-    expect(lastFrame()).toContain('lookup_customers')
+    // Detail pane: the tool card is up, for THAT tool — the name renders twice,
+    // once as the tree row and once as the card's title.
+    expect(occurrences(lastFrame()!, 'lookup_customers')).toBe(2)
 
     // Append a second child to lookup_orders — a row that lands ABOVE
     // lookup_customers once the tree rebuilds, shifting every row below it
@@ -214,9 +219,8 @@ describe('TraceView (tree-model)', () => {
       [baseRow(api({ at: 200, normalizedEndpoint: '/orders-b', trace: { localId: 1, seq: 2 } }))])
     await tick(1200)
 
-    expect(lastFrame()).toContain('/orders-b')                // the new row is there
-    expect(lastFrame()).toContain('tool'.padEnd(10) + 'ok')   // selection is still a tool
-    expect(lastFrame()).toContain('lookup_customers')          // specifically the one it was on
+    expect(lastFrame()).toContain('/orders-b')                 // the new row is there
+    expect(occurrences(lastFrame()!, 'lookup_customers')).toBe(2)   // still on the same tool
   })
 
   it('f toggles flat mode and back', async () => {
@@ -294,7 +298,8 @@ describe('TraceView (tree-model)', () => {
         startedAt: T0, endedAt: T0 + 5000, status: 200, incomplete: false }],
       closed: [],
     }, [baseRow(api({
-      at: 100, normalizedEndpoint: '/first-call', costUsd: null, trace: { localId: 1, seq: 0 },
+      at: 100, normalizedEndpoint: '/first-call', url: 'https://x.example.com/first-call',
+      costUsd: null, trace: { localId: 1, seq: 0 },
     }))])
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
 
@@ -302,18 +307,21 @@ describe('TraceView (tree-model)', () => {
       <TraceView db={db} traceId={rootId} columns={140} onBack={noop} onOpenRequest={noop} />)
     await tick()
     stdin.write(DOWN); await tick()     // root -> first-call (the last row)
-    expect(lastFrame()).toContain('cost'.padEnd(10) + '— unpriced')
+    expect(occurrences(lastFrame()!, '/first-call')).toBe(2)   // tree row + detail card
 
     // first-call's row (and key) is untouched by this append — it is not
     // removed, just no longer last. A naive identity-first resolver would
     // keep the cursor right where it is.
     w.write({ opened: [], closed: [] }, [baseRow(api({
-      at: 2000, normalizedEndpoint: '/second-call', costUsd: 0.05, trace: { localId: 1, seq: 1 },
+      at: 2000, normalizedEndpoint: '/second-call', url: 'https://x.example.com/second-call',
+      costUsd: 0.05, trace: { localId: 1, seq: 1 },
     }))])
     await tick(1200)
 
     expect(lastFrame()).toContain('/second-call')
-    expect(lastFrame()).toContain('cost'.padEnd(10) + '$0.0500')   // selection followed to the new last row
+    // selection followed to the new last row: its card is the one showing
+    expect(occurrences(lastFrame()!, '/second-call')).toBe(2)
+    expect(occurrences(lastFrame()!, '/first-call')).toBe(1)
   })
 
   it('clamps against the freshest cursor position, not a stale one from the last rows change (Finding 3)', async () => {
@@ -362,8 +370,9 @@ describe('TraceView (tree-model)', () => {
 
     expect(lastFrame()).not.toContain('/orders/a3')
     // Clamped near its old index (now the LLM turn, the new last row) —
-    // not reset all the way back to root.
-    expect(lastFrame()).toContain('model'.padEnd(10) + MODEL)
+    // not reset all the way back to root. The LLM card's exact token block is
+    // the tell: the tree column renders `10→5` unspaced.
+    expect(lastFrame()).toContain('tokens  10 → 5')
   })
 
   it('single-pane STEP width is columns - 34 per spec §2.5 (Finding 4)', () => {

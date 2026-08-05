@@ -3,9 +3,9 @@ import { Box, Text, useInput } from 'ink'
 import { query, type StorageDriver } from '@burn0/core'
 import type { TraceTreeNode } from '@burn0/core'
 import { usePoll, useTermSize } from '../hooks.js'
-import { theme, statusColor } from '../theme.js'
+import { theme } from '../theme.js'
 import { buildRows, rowKey, type DisplayRow } from '../tree-model.js'
-import { fmtUsd, fmtNum, fmtMs, fmtTime } from '../../format.js'
+import { TraceDetail } from './TraceDetail.js'
 
 /** Two-pane trace view: tree on the left, detail following the selection on the
  *  right. Ink has no layout query, so the width branch is manual — below this,
@@ -201,8 +201,10 @@ export function TraceView({ db, traceId, columns: forced, onBack, onOpenRequest 
         <Box gap={2} width={columns}>
           {treePane}
           <Box flexDirection="column" width={detailWidth}>
-            <Text dimColor>DETAIL</Text>
-            <Detail node={selected?.node} />
+            <TraceDetail
+              row={selected} nodes={nodes} db={db}
+              width={detailWidth} height={term.rows}
+            />
           </Box>
         </Box>
       ) : treePane}
@@ -311,47 +313,6 @@ function parentKeyOf(row: DisplayRow, nodes: TraceTreeNode[]): string | null {
   return null
 }
 
-// ---------------------------------------------------------------------------
-// Detail pane — unchanged this round (Task 13 replaces it with fold/info
-// aware content); still keyed off the raw node, so fold and info rows show
-// nothing rather than stale data from whatever node preceded them.
-// ---------------------------------------------------------------------------
-
-function tokens(n: TraceTreeNode): string {
-  if (!n.tokensIn && !n.tokensOut) return '—'
-  return `${fmtNum(n.tokensIn ?? 0)}→${fmtNum(n.tokensOut ?? 0)}`
-}
-
-function Detail({ node }: { node: TraceTreeNode | undefined }) {
-  if (!node) return null
-  const line = (label: string, value: string) => (
-    <Box>
-      <Text dimColor>{label.padEnd(10)}</Text>
-      <Text>{value}</Text>
-    </Box>
-  )
-  return (
-    <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
-      <Text bold color={theme.accent} wrap="truncate">{node.label}</Text>
-      {node.hostname && line('host', node.hostname)}
-      {node.model && line('model', node.model)}
-      {line('started', fmtTime(node.startedAt))}
-      {line('took', fmtMs(node.durationMs))}
-      {node.status != null && (
-        <Box>
-          <Text dimColor>{'status'.padEnd(10)}</Text>
-          <Text color={statusColor(node.status)}>{String(node.status)}</Text>
-        </Box>
-      )}
-      {node.type === 'tool' && line('tool', node.toolStatus ?? 'running')}
-      {node.type === 'tool' && node.attribution === 'turn' && (
-        <Text color={theme.warn}>calls not attributable — several tools ran at once</Text>
-      )}
-      {line('calls', fmtNum(node.calls))}
-      {line('cost', node.pricedCalls > 0 ? fmtUsd(node.costUsd) : '— unpriced')}
-      {line('tokens', tokens(node))}
-      {node.incomplete && <Text color={theme.warn}>response never finished</Text>}
-      {node.requestId != null && <Text dimColor>enter opens the payload</Text>}
-    </Box>
-  )
-}
+// The detail pane lives in `TraceDetail.tsx` — five cards, one per row type,
+// including the fold and info rows this screen's old label/value card could
+// only render as a blank.

@@ -7,6 +7,7 @@ export {
   type StorageDriver, type WriteCtx,
 } from './storage/db.js'
 export { pruneRetention, maybeVacuum } from './storage/retention.js'
+export { redactQueryString, redactSecretValues } from './storage/redact.js'
 export { loadPricing, computeCost, type PricingTable } from './pricing/index.js'
 export { initBurn0, type Burn0Handle } from './init.js'
 export { detectRuntime, runtimeCapabilities, runtimeVersion, type Runtime, type RuntimeCapabilities } from './runtime.js'

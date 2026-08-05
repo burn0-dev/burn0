@@ -137,13 +137,16 @@ describe('TraceView', () => {
     const { db, rootId } = seeded()
     const wide = render(<TraceView db={db} traceId={rootId} columns={130} onBack={noop} onOpenRequest={noop} />)
     await tick()
-    expect(wide.lastFrame()).toContain('DETAIL')
+    // The detail card — a bordered box beside the tree, with the root card's
+    // pricing-coverage line inside it.
+    expect(wide.lastFrame()).toContain('╭')
+    expect(wide.lastFrame()).toContain('calls priced')
 
     // Ink has no layout query, so this is a manual branch — below 110 columns
     // the detail pane would squeeze the tree into unreadability
     const narrow = render(<TraceView db={db} traceId={rootId} columns={90} onBack={noop} onOpenRequest={noop} />)
     await tick()
-    expect(narrow.lastFrame()).not.toContain('DETAIL')
+    expect(narrow.lastFrame()).not.toContain('╭')
   })
 
   it('the detail pane follows the selection', async () => {
