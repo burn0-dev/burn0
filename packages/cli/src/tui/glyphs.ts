@@ -34,6 +34,8 @@ export function padCell(s: string, w: number, align: 'left' | 'right' = 'left'):
  *  `…` is always exactly one char, always leftmost. Snap forward to a `/`
  *  only when one occurs within the first 4 kept chars — a greedy break-at-/
  *  would collapse `…SRV/$metadata` to `…/$metadata` and destroy the signal.
+ *  A slash already at index 0 needs no snap and keeps its place: `…/sap/API_…`
+ *  says the segment is whole, `…sap/API_…` says its head was cut off (§2.2).
  *  Accumulates tail by display width from the END, iterating code points to
  *  avoid splitting surrogate pairs on non-BMP characters. */
 export function truncLeft(path: string, w: number): string {
@@ -52,11 +54,13 @@ export function truncLeft(path: string, w: number): string {
     usedWidth += cpWidth
   }
 
-  // Apply slash-snap logic (slash index computed in code points)
+  // Apply slash-snap logic (slash index computed in code points). Index 0 is
+  // already on the boundary — snapping is a no-op there, not a reason to drop
+  // the slash.
   const tailCodePoints = [...tail]
   const slashIndex = tailCodePoints.indexOf('/')
-  if (slashIndex >= 0 && slashIndex <= 4) {
-    tail = tailCodePoints.slice(slashIndex || 1).join('')
+  if (slashIndex > 0 && slashIndex <= 4) {
+    tail = tailCodePoints.slice(slashIndex).join('')
   }
 
   return G.elide + tail

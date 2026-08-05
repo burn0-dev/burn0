@@ -16,9 +16,20 @@ describe('glyphs', () => {
   it('truncLeft exact cases', () => {
     const p = '/s4hanacloud/sap/opu/odata/sap/API_SALES_ORDER_SRV/A_SalesOrder'
     expect(truncLeft(p, p.length)).toBe(p)                       // fits → whole
-    expect(truncLeft(p, 34)).toBe('…API_SALES_ORDER_SRV/A_SalesOrder')  // no slash in first 4 kept → plain
-    expect(truncLeft(p, 36)).toBe('…/API_SALES_ORDER_SRV/A_SalesOrder') // slash at kept-index ≤4 → snap
+    expect(truncLeft(p, 30)).toBe('…_SALES_ORDER_SRV/A_SalesOrder')  // no slash within 4 → plain elision
+    expect(truncLeft(p, 36)).toBe('…/API_SALES_ORDER_SRV/A_SalesOrder') // slash at kept-index 2 → snap forward
     expect(truncLeft(p, 3)).toBe('…er')
+  })
+
+  it('truncLeft keeps a boundary slash the budget already landed on', () => {
+    // The kept tail starts exactly at `/`: there is nothing to snap forward to,
+    // so the slash stays. Dropping it (`…API_…`) would read as a path segment
+    // that had its head cut off, when in fact the segment is whole (spec §2.2).
+    const p = '/s4hanacloud/sap/opu/odata/sap/API_SALES_ORDER_SRV/A_SalesOrder'
+    expect(truncLeft(p, 34)).toBe('…/API_SALES_ORDER_SRV/A_SalesOrder')
+    expect(truncLeft(p, 38)).toBe('…/sap/API_SALES_ORDER_SRV/A_SalesOrder')  // the §2.6 mockup form
+    expect(visWidth(truncLeft(p, 34))).toBe(34)
+    expect(visWidth(truncLeft(p, 38))).toBe(38)
   })
 
   it('truncLeft with wide chars maintains display width boundary', () => {

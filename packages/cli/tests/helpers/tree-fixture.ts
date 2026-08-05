@@ -105,6 +105,8 @@ export function toolNode(o: {
   id: number; depth: number; at: number; ms: number | null; label: string
   toolStatus?: string | null; attribution?: string | null; calls?: number
   incomplete?: boolean
+  costUsd?: number; pricedCalls?: number
+  tin?: number; tout?: number; cached?: number | null; tokenCalls?: number
 }): TraceTreeNode {
   return {
     ...BLANK,
@@ -115,11 +117,12 @@ export function toolNode(o: {
     startedAt: o.at,
     endedAt: o.ms == null ? null : o.at + o.ms,
     durationMs: o.ms,
-    costUsd: 0,
-    pricedCalls: 0,
-    tokensIn: 0,
-    tokensOut: 0,
-    tokenCalls: 0,
+    costUsd: o.costUsd ?? 0,
+    pricedCalls: o.pricedCalls ?? 0,
+    tokensIn: o.tin ?? 0,
+    tokensOut: o.tout ?? 0,
+    tokensCached: o.cached === undefined ? null : o.cached,
+    tokenCalls: o.tokenCalls ?? 0,
     calls: o.calls ?? 0,
     incomplete: o.incomplete ?? false,
     toolStatus: o.toolStatus ?? 'ok',
@@ -281,6 +284,61 @@ export function errorRunTree(): { root: TraceTreeNode; nodes: TraceTreeNode[] } 
     }))
   }
   return { root, nodes }
+}
+
+/** An explicit `withTrace` scope nested inside the root, sitting between two
+ *  tools by start time — the grammar's fifth row type. An ALS-parented scope is
+ *  a *sibling* of the tools around it, never a child of one: inference must
+ *  never overwrite explicit structure (spec §4). */
+export const NESTED_LABEL = 'checkout_flow'
+
+export function nestedTraceTree(): { root: TraceTreeNode; nodes: TraceTreeNode[] } {
+  const root = traceNode({
+    id: 1, depth: 0, at: T0, ms: 10_000, label: ROOT_LABEL,
+    costUsd: 0.0321, pricedCalls: 1, tin: 20_000, tout: 480, cached: 15_000,
+    tokenCalls: 1, calls: 5,
+  })
+  const nodes: TraceTreeNode[] = [
+    root,
+    toolNode({ id: 10, depth: 1, at: T0, ms: 1000, label: 'sap_lookup', calls: 1 }),
+    apiReq({ id: 2, depth: 2, at: T0 + 50, ms: 400, endpoint: `${SAP_PREFIX}API_PRODUCT_SRV/A_Product` }),
+    // the withTrace scope — aggregates its own two children
+    traceNode({
+      id: 11, depth: 1, at: T0 + 2000, ms: 3000, label: NESTED_LABEL,
+      costUsd: 0.0321, pricedCalls: 1, tin: 20_000, tout: 480, cached: 15_000,
+      tokenCalls: 1, calls: 2,
+    }),
+    llmReq({ id: 3, depth: 2, at: T0 + 2100, ms: 2200, tin: 20_000, cached: 15_000, tout: 480, cost: 0.0321 }),
+    apiReq({ id: 4, depth: 2, at: T0 + 4400, ms: 500, endpoint: `${SAP_PREFIX}API_SALES_ORDER_SRV/A_SalesOrder`, method: 'POST' }),
+    toolNode({ id: 12, depth: 1, at: T0 + 6000, ms: 1500, label: 'sap_write', calls: 1 }),
+    apiReq({ id: 5, depth: 2, at: T0 + 6050, ms: 900, endpoint: `${SAP_PREFIX}API_BILLING_DOCUMENT_SRV/A_BillingDocument` }),
+  ]
+  return { root, nodes }
+}
+
+/** Two tools that both have an LLM descendant: one reported usage, one never
+ *  did. The pair pins the aggregate `—` apart from the blank cell a tool with
+ *  no LLM beneath it gets. */
+export function toolTokenTree(): { root: TraceTreeNode; nodes: TraceTreeNode[] } {
+  const root = traceNode({
+    id: 1, depth: 0, at: T0, ms: 5000, label: ROOT_LABEL,
+    costUsd: 0.005, pricedCalls: 1, tin: 12_000, tout: 340, cached: 8000,
+    tokenCalls: 1, calls: 2,
+  })
+  return {
+    root,
+    nodes: [
+      root,
+      toolNode({
+        id: 10, depth: 1, at: T0, ms: 2000, label: 'agent_delegate', calls: 1,
+        costUsd: 0.005, pricedCalls: 1, tin: 12_000, tout: 340, cached: 8000, tokenCalls: 1,
+      }),
+      llmReq({ id: 2, depth: 2, at: T0 + 50, ms: 1800, tin: 12_000, cached: 8000, tout: 340, cost: 0.005 }),
+      // the delegate spoke to a model, but nothing came back that could be counted
+      toolNode({ id: 11, depth: 1, at: T0 + 2500, ms: 1500, label: 'agent_silent', calls: 1 }),
+      llmReq({ id: 3, depth: 2, at: T0 + 2550, ms: 1300, tin: null, cached: null, tout: null, cost: null }),
+    ],
+  }
 }
 
 /** One LLM request that never reported usage — the `—` case — plus a plain API

@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { buildRows, FOLD_MIN, rowKey, type DisplayRow } from '../src/tui/tree-model.js'
 import { visWidth } from '../src/tui/glyphs.js'
 import {
-  referenceTree, errorRunTree, usagelessLlmTree, traceNode, apiReq, toolNode,
-  ROOT_LABEL, TOOL_LABEL, SAP_PREFIX, T0,
+  referenceTree, errorRunTree, usagelessLlmTree, nestedTraceTree, toolTokenTree,
+  traceNode, apiReq, toolNode, ROOT_LABEL, TOOL_LABEL, SAP_PREFIX, T0,
 } from './helpers/tree-fixture.js'
 
 const tree = referenceTree()
@@ -119,9 +119,9 @@ describe('buildRows — names and suffixes', () => {
   it('API names are entity + non-GET verb + left-truncated tail', () => {
     const r = rows()
     const get = r.find((x) => x.node?.id === 15)!
-    // guides · marker · entity · two spaces · elided head · the tail that carries the signal
-    expect(get.step.startsWith('│ ├ ◇ sap.com  …')).toBe(true)
-    expect(step(get).endsWith('/A_SalesOrder')).toBe(true)
+    // The spec §2.6 mockup line, exactly: guides · marker · entity · two spaces
+    // · elided head keeping its boundary slash · the tail that carries the signal.
+    expect(step(get)).toBe('│ ├ ◇ sap.com  …/sap/API_SALES_ORDER_SRV/A_SalesOrder')
     expect(step(get)).not.toContain('GET')                 // the default verb is noise
     const post = r.find((x) => x.node?.id === 21)!
     expect(post.step).toContain('sap.com  POST ')
@@ -218,6 +218,40 @@ describe('buildRows — guides and structure', () => {
     expect(open.map((x) => x.key)).toEqual(['trace:1', 'tool:2', 'tool:3', 'req:4'])
   })
 
+  it('a nested withTrace renders as a sibling of the tools around it', () => {
+    const r = buildRows({ tree: nestedTraceTree(), expanded: NONE(), collapsed: NONE(), stepWidth: 53, flat: false })
+    // ALS parents the scope to the enclosing trace, so it sits between the two
+    // tools by start time — inference never reparents explicit structure.
+    expect(r.filter((x) => x.node?.depth === 1).map((x) => x.key)).toEqual(['tool:10', 'trace:11', 'tool:12'])
+    const nested = r.find((x) => x.key === 'trace:11')!
+    expect(step(nested)).toBe('├ checkout_flow')           // name only — no marker
+    expect(nested.stepBold).toBe(true)
+    expect(nested.stepColor).toBe('#ff7a00')               // accent
+    expect(nested.isBranch).toBe(true)
+    expect(nested.requestId).toBe(null)
+  })
+
+  it('a nested withTrace sums its subtree and spans its own window', () => {
+    const r = buildRows({ tree: nestedTraceTree(), expanded: NONE(), collapsed: NONE(), stepWidth: 53, flat: false })
+    const nested = r.find((x) => x.key === 'trace:11')!
+    expect(nested.cost).toBe('$0.0321')
+    expect(nested.tokens).toBe('20.0k↺→480')
+    expect(nested.took).toBe('3.0s')
+    expect(r.filter((x) => x.node?.depth === 2).map((x) => x.key))
+      .toEqual(['req:2', 'req:3', 'req:4', 'req:5'])       // children visible by default
+  })
+
+  it('a collapsed withTrace reports what it is hiding', () => {
+    const r = buildRows({
+      tree: nestedTraceTree(), expanded: NONE(), collapsed: new Set(['trace:11']),
+      stepWidth: 53, flat: false,
+    })
+    expect(step(r.find((x) => x.key === 'trace:11')!)).toBe('├ checkout_flow ▸2')
+    expect(r.some((x) => x.key === 'req:3')).toBe(false)
+    expect(r.some((x) => x.key === 'req:2')).toBe(true)     // the sibling tool is untouched
+    expect(r.find((x) => x.key === 'trace:11')!.cost).toBe('$0.0321')  // aggregates still shown
+  })
+
   it('row keys are stable identities, not indexes', () => {
     const r = rows()
     expect(r[0].key).toBe('trace:1')
@@ -239,6 +273,19 @@ describe('buildRows — cells', () => {
     expect(tool.tokens).toBe('')
     expect(tool.cost).toBe('—')
     expect(tool.took).toBe('1.4s')
+  })
+
+  it('a tool with a reporting LLM descendant sums it; one with a silent LLM says —', () => {
+    const r = buildRows({ tree: toolTokenTree(), expanded: NONE(), collapsed: NONE(), stepWidth: 53, flat: false })
+    const reported = r.find((x) => x.key === 'tool:10')!
+    expect(reported.tokens).toBe('12.0k↺→340')             // Σ over the subtree
+    expect(reported.cost).toBe('$0.0050')
+    const silent = r.find((x) => x.key === 'tool:11')!
+    expect(silent.tokens).toBe('—')                        // applicable, unreported
+    expect(silent.cost).toBe('—')
+    // and the three states are genuinely three, not two
+    expect(r.find((x) => x.node?.id === 3)!.tokens).toBe('—')   // the silent LLM leaf
+    expect(rows().find((x) => x.key === 'tool:31')!.tokens).toBe('')  // no LLM beneath at all
   })
 
   it('the root sums its subtree honestly', () => {
@@ -305,7 +352,10 @@ describe('buildRows — flat mode and info rows', () => {
 
 describe('buildRows — width discipline', () => {
   it('every step in every mode and width is exactly stepWidth cells', () => {
-    const trees = [tree, errorRunTree(), usagelessLlmTree(), referenceTree({ expiredCalls: 3, incomplete: true })]
+    const trees = [
+      tree, errorRunTree(), usagelessLlmTree(), nestedTraceTree(), toolTokenTree(),
+      referenceTree({ expiredCalls: 3, incomplete: true }),
+    ]
     for (const t of trees) {
       for (const w of [29, 30, 35, 44, 53, 65, 66, 98]) {
         for (const flat of [false, true]) {
