@@ -11,11 +11,18 @@ import { seedDb, baseRow } from './helpers/seed.js'
 const tick = (ms = 25) => new Promise((r) => setTimeout(r, ms))
 
 describe('App shell', () => {
-  it('renders onboarding when db is empty', () => {
+  it('renders first-run onboarding when db is empty, with activation behind ?', async () => {
     const { db } = seedDb([])
-    const { lastFrame } = render(<App db={db} />)
-    expect(lastFrame()).toContain('No requests captured yet')
+    const { lastFrame, stdin } = render(<App db={db} />)
+    await tick()
+    expect(lastFrame()).toContain('FIRST RUN')
+    expect(lastFrame()).toContain('Your API activity will appear here.')
+    // Activation commands are troubleshooting info, not a headline step.
+    expect(lastFrame()).not.toContain("import 'burn0'")
+    stdin.write('?')
+    await tick()
     expect(lastFrame()).toContain("import 'burn0'")
+    expect(lastFrame()).toContain('bun --import burn0/register')
   })
   it('renders tab row and data with a seeded db', () => {
     const { db } = seedDb()

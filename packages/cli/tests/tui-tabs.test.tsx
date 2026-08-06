@@ -11,10 +11,10 @@ describe('tab actually switches screens', () => {
     const { db } = seedDb()
     const { lastFrame, stdin } = render(<App db={db} />)
     await tick()
-    expect(lastFrame()).toContain('LLM spend (30d)')  // overview cards
+    expect(lastFrame()).toContain('LLM spend')  // overview cards
     stdin.write('\t')
     await tick()
-    expect(lastFrame()).not.toContain('LLM spend (30d)')  // usage tree now
+    expect(lastFrame()).not.toContain('LLM spend')  // usage tree now
     expect(lastFrame()).toContain('VENDOR / SERVICE / ENDPOINT')
   })
 
@@ -41,20 +41,23 @@ const RIGHT = '[C'
 
 describe('overview window selector focus', () => {
   it('down enters selector, right changes window without switching tab', async () => {
-    const { db } = seedDb()
+    // Seeded 2 days back: visible in the default 30d window, absent from today —
+    // so the wrap to `today` has a textual effect to assert on.
+    const { db } = seedDb([{ startedAt: Date.now() - 2 * 86_400_000 }])
     const { lastFrame, stdin } = render(<App db={db} />)
     await tick()
-    expect(lastFrame()).toContain('LLM spend (30d)')
-    stdin.write(DOWN)   // enter selector
+    expect(lastFrame()).toContain('LLM spend')
+    stdin.write(DOWN)   // enter window selector
     await tick()
     stdin.write(RIGHT)  // 30d -> today (wraps)
     await tick()
-    expect(lastFrame()).toContain('LLM spend (today)')   // window changed
-    expect(lastFrame()).toContain('ENTITY')              // still on Overview
+    expect(lastFrame()).toContain('No requests in today — try 30d.')  // window changed
+    expect(lastFrame()).toContain('WINDOW')                           // still on Overview
     stdin.write(UP)     // leave selector
     await tick()
     stdin.write(RIGHT)  // right switches tab again
     await tick()
-    expect(lastFrame()).not.toContain('LLM spend')
+    expect(lastFrame()).not.toContain('WINDOW')
+    expect(lastFrame()).toContain('VENDOR / SERVICE / ENDPOINT')
   })
 })

@@ -6,7 +6,11 @@ import { theme } from './theme.js'
 import { Rule } from './ui.js'
 import { label, type ResolvedScope } from '../scope.js'
 import { FooterContext, NAV } from './footer.js'
+import type { TuiRoute } from './routes.js'
 import { OverviewScreen } from './screens/Overview.js'
+import { OnboardingScreen } from './screens/Onboarding.js'
+import { EntityDetailScreen } from './screens/EntityDetail.js'
+import { TargetDetailScreen } from './screens/TargetDetail.js'
 import { UsageScreen } from './screens/Usage.js'
 import { TracesScreen } from './screens/Traces.js'
 import { TraceListScreen } from './screens/TraceList.js'
@@ -16,15 +20,12 @@ import { DebugScreen } from './screens/Debug.js'
 export const TABS = ['Overview', 'Usage', 'LLM', 'API', 'Logs'] as const
 
 // Per-tab defaults — the fallback until (or unless) the active screen claims
-// the line itself via `useFooter` (see `footer.ts`). Tabs 0/1/3/4 never
-// claim, so their entries here ARE the permanent footer for those tabs. Tab 2
-// (TraceList/TraceView) claims the line in every one of its own sub-states
-// (list, flat sub-view, mid-trace) — entry 2 here only ever paints on the
-// single pre-effect frame before that screen's first claim lands (review
-// round 1: an earlier version of this comment overstated how much of tab 2's
-// footer this entry actually covers in steady state — it's effectively none).
+// the line itself via `useFooter` (see `footer.ts`). Tabs 1/3/4 never
+// claim, so their entries here ARE the permanent footer for those tabs.
+// Tabs 0 and 2 claim the line in their own sub-states; their entries here
+// only paint on the single pre-effect frame before the first claim lands.
 const FOOTERS: Record<number, string> = {
-  0: `${NAV} · ↓ window`,
+  0: `${NAV} · ↓ focus`,
   1: `${NAV} · ↑↓ move · h/l/enter expand`,
   2: `${NAV} · ↑↓ select · enter open trace · f flat`,
   3: `${NAV} · ↑↓ select · enter open request`,
@@ -38,7 +39,13 @@ const ALL_PROJECTS: ResolvedScope = {
 export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; scope?: ResolvedScope }) {
   const { exit } = useApp()
   const [tab, setTab] = useState(0)
-  const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null)
+  // Overview → entity → target → request drill-down. `dashboard` is the tab
+  // shell; everything else renders instead of it and Escape pops one level,
+  // restoring the saved parent state (routes.ts).
+  const [route, setRoute] = useState<TuiRoute>({ kind: 'dashboard' })
+  // The window is view state shared by the whole drill-down: one source of
+  // truth here, so a target screen queries the same window Overview shows.
+  const [windowDays, setWindowDays] = useState<query.WindowDays>(30)
   const [subFocus, setSubFocus] = useState(false) // a screen widget holds ←→ (e.g. Overview window selector)
   // The one footer line an active (sub)screen can claim via `useFooter`
   // (footer.ts). Reset to null whenever the tab changes so a stale claim from
@@ -51,6 +58,9 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
 
   const scope: Scope = { projectIds: projectId == null ? null : [projectId], services: service ? [service] : null }
   const stats = usePoll(() => query.dbStats(db, scope), 1000, [projectId, service])
+  // First-run gating is UNSCOPED: an empty selected project inside a
+  // populated database is a scoped-empty Overview, not a first run.
+  const globalStats = usePoll(() => query.dbStats(db), 1000, [])
   // Services are a property of the *project*, not of the current service filter —
   // scoping this query by `service` would collapse the list to whatever is
   // already selected and make `s` a one-way trip.
@@ -65,15 +75,30 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
   const switchTab = (next: (t: number) => number) => {
     setSubFocus(false)
     setFooterOverride(null) // the screen being left clears its own claim on
-    // unmount; this is the belt to that suspenders, and what makes Q12.1's
-    // "tab switch resets drill" true of the footer too, not just the tree.
+    // unmount; this is the belt to that suspenders — a tab switch resets the
+    // footer as well as any screen-local drill state.
     setTab(next)
+  }
+
+  // Escape pops exactly one level and rebuilds the parent route from the
+  // saved return state — never a fresh, cursor-at-zero parent.
+  const popRoute = () => {
+    if (route.kind === 'request') setRoute(route.returnTo)
+    else if (route.kind === 'target') {
+      setRoute({
+        kind: 'entity', entity: route.entity, entityClass: route.entityClass,
+        restore: route.returnTo.entity, returnTo: route.returnTo.overview,
+      })
+    } else if (route.kind === 'entity') {
+      setWindowDays(route.returnTo.windowDays)
+      setRoute({ kind: 'dashboard', restore: route.returnTo })
+    }
   }
 
   useInput((input, key) => {
     if (input === 'q') exit()
-    if (selectedRequestId != null) {
-      if (key.escape) setSelectedRequestId(null)
+    if (route.kind !== 'dashboard') {
+      if (key.escape) popRoute()
       return
     }
     if (key.tab) switchTab((t) => (t + 1) % TABS.length)
@@ -93,9 +118,9 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
     if (key.leftArrow) switchTab((t) => (t + TABS.length - 1) % TABS.length)
   })
 
-  if (stats.requestCount === 0) return <Onboarding rows={rows} columns={columns} />
+  if (globalStats.requestCount === 0) return <OnboardingScreen rows={rows} columns={columns} />
 
-  const openDebug = (id: number) => setSelectedRequestId(id)
+  const openDebug = (id: number) => setRoute({ kind: 'request', requestId: id, returnTo: { kind: 'dashboard' } })
 
   return (
     <FooterContext.Provider value={setFooterOverride}>
@@ -103,14 +128,14 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
         <Box>
           <Text bold color={theme.accent}>burn0</Text>
           <Text dimColor> │ </Text>
-          <Text color={theme.model}>{scopeLabel}{service ? ` · ${service}` : ''}</Text>
+          <Text color={theme.project}>{scopeLabel}{service ? ` · ${service}` : ''}</Text>
           <Text dimColor> │</Text>
           {TABS.map((t, i) => (
             <Text
               key={t}
-              inverse={i === tab && selectedRequestId == null}
               bold={i === tab}
-              color={i === tab ? theme.accent : undefined}
+              backgroundColor={i === tab && route.kind === 'dashboard' ? theme.accent : undefined}
+              color={i === tab ? (route.kind === 'dashboard' ? theme.tabFg : theme.accent) : undefined}
               dimColor={i !== tab}
             > {t} </Text>
           ))}
@@ -120,11 +145,35 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
         </Box>
         <Rule columns={columns - 2} />
         <Box flexDirection="column" flexGrow={1} marginTop={1}>
-          {selectedRequestId != null ? (
-            <DebugScreen db={db} requestId={selectedRequestId} />
+          {route.kind === 'request' ? (
+            <DebugScreen db={db} requestId={route.requestId} />
+          ) : route.kind === 'entity' ? (
+            <EntityDetailScreen
+              db={db} scope={scope} windowDays={windowDays}
+              entity={route.entity} entityClass={route.entityClass} restore={route.restore}
+              onOpenTarget={(target, state) => setRoute({
+                kind: 'target', entity: route.entity, entityClass: route.entityClass, target,
+                returnTo: { entity: state, overview: route.returnTo },
+              })}
+            />
+          ) : route.kind === 'target' ? (
+            <TargetDetailScreen
+              db={db} scope={scope} windowDays={windowDays}
+              entity={route.entity} entityClass={route.entityClass} target={route.target}
+              onOpenRequest={(id) => setRoute({ kind: 'request', requestId: id, returnTo: route })}
+            />
           ) : (
             <>
-              {tab === 0 && <OverviewScreen db={db} scope={scope} onSubFocus={setSubFocus} />}
+              {tab === 0 && (
+                <OverviewScreen
+                  db={db} scope={scope} onSubFocus={setSubFocus}
+                  windowDays={windowDays} onWindowChange={setWindowDays}
+                  restore={route.restore}
+                  onOpenEntity={(row, state) => setRoute({
+                    kind: 'entity', entity: row.entity, entityClass: row.entityClass, returnTo: state,
+                  })}
+                />
+              )}
               {tab === 1 && <UsageScreen db={db} scope={scope} />}
               {tab === 2 && <TraceListScreen db={db} scope={scope} onOpenRequest={openDebug} />}
               {tab === 3 && <TracesScreen db={db} scope={scope} llm={false} onOpen={openDebug} />}
@@ -134,29 +183,14 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
         </Box>
         <Rule columns={columns - 2} />
         <Box>
-          {/* Exactly one footer line, always: `selectedRequestId` (the
-             remaining App-level swap, for screens other than TraceView — see
-             footer.ts) forces its own; otherwise the active screen's own
-             `useFooter` claim wins over this tab's static default. */}
-          <Text dimColor>{selectedRequestId != null
+          {/* Exactly one footer line, always: a request overlay forces its
+             own; otherwise the active screen's `useFooter` claim wins over
+             this tab's static default. */}
+          <Text dimColor>{route.kind === 'request'
             ? 'q quit · esc back'
-            : `${footerOverride ?? FOOTERS[tab]}${projects.length > 1 ? ' · p project' : ''}${services.length > 1 ? ' · s service' : ''}`}</Text>
+            : `${footerOverride ?? FOOTERS[tab]}${projects.length > 1 && route.kind === 'dashboard' ? ' · p project' : ''}${services.length > 1 && route.kind === 'dashboard' ? ' · s service' : ''}`}</Text>
         </Box>
       </Box>
     </FooterContext.Provider>
-  )
-}
-
-function Onboarding({ rows, columns }: { rows: number; columns: number }) {
-  return (
-    <Box flexDirection="column" width={columns} height={rows} padding={1}>
-      <Text bold color={theme.accent}>burn0</Text>
-      <Text bold> No requests captured yet</Text>
-      <Text> </Text>
-      <Text>1. npm install burn0</Text>
-      <Text>2. Add to the top of your entry file:   <Text color={theme.model}>import 'burn0'</Text></Text>
-      <Text dimColor>   (or run:  node --import burn0/register app.js)</Text>
-      <Text>3. Run your app, make some API calls, then reopen burn0.</Text>
-    </Box>
   )
 }

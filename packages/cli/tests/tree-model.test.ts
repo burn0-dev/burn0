@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildRows, FOLD_MIN, rowKey, type DisplayRow } from '../src/tui/tree-model.js'
 import { visWidth } from '../src/tui/glyphs.js'
+import { theme } from '../src/tui/theme.js'
 import {
   referenceTree, errorRunTree, usagelessLlmTree, nestedTraceTree, toolTokenTree,
   traceNode, apiReq, toolNode, ROOT_LABEL, TOOL_LABEL, SAP_PREFIX, T0,
@@ -46,7 +47,7 @@ describe('buildRows — folds', () => {
   it('an error row breaks a fold — a failure can never hide inside one', () => {
     const r = buildRows({ tree: withError, expanded: NONE(), collapsed: NONE(), stepWidth: 53, flat: false })
     expect(r.some((x) => x.kind === 'fold')).toBe(false)   // 3 before + 2 after, both under FOLD_MIN
-    expect(r.find((x) => x.node?.status === 500)!.stepColor).toBe('red')
+    expect(r.find((x) => x.node?.status === 500)!.stepColor).toBe(theme.err)
     expect(r.find((x) => x.node?.status === 500)!.step).toContain('500')
   })
 
@@ -62,7 +63,7 @@ describe('buildRows — folds', () => {
     })
     expect(r.some((x) => x.kind === 'fold')).toBe(false)
     const failed = r.find((x) => x.node?.id === 4)!
-    expect(failed.stepColor).toBe('red')
+    expect(failed.stepColor).toBe(theme.err)
     expect(step(failed)).toMatch(/—$/)                     // applicable, unreported
   })
 
@@ -145,9 +146,9 @@ describe('buildRows — names and suffixes', () => {
     const r = rows()
     expect(step(r.find((x) => x.key === 'tool:31')!)).toBe(`├ 🔧 ${TOOL_LABEL} ~`)
     expect(step(r.find((x) => x.key === 'tool:33')!)).toBe(`├ 🔧 ${TOOL_LABEL} ~ error`)
-    expect(r.find((x) => x.key === 'tool:33')!.stepColor).toBe('red')
+    expect(r.find((x) => x.key === 'tool:33')!.stepColor).toBe(theme.err)
     expect(step(r.find((x) => x.key === 'tool:36')!)).toBe(`├ 🔧 ${TOOL_LABEL} ~ unresolved`)
-    expect(r.find((x) => x.key === 'tool:36')!.stepColor).toBe('yellow')
+    expect(r.find((x) => x.key === 'tool:36')!.stepColor).toBe(theme.warn)
   })
 
   it('suffixes survive any width — names absorb truncation', () => {
@@ -166,7 +167,7 @@ describe('buildRows — names and suffixes', () => {
     const r = buildRows({ tree: t, expanded: NONE(), collapsed: NONE(), stepWidth: 66, flat: false })
     expect(r[0].step).toContain('⚠ incomplete')
     expect(r[0].took).toBe('—')
-    expect(r[0].stepColor).toBe('yellow')
+    expect(r[0].stepColor).toBe(theme.warn)
   })
 })
 
@@ -219,18 +220,18 @@ describe('buildRows — live, incomplete and status-null roots (spec §4)', () =
     const incomplete = buildRows({
       tree: referenceTree({ incomplete: true }), expanded: NONE(), collapsed: NONE(), stepWidth: 66, flat: false,
     })
-    expect(incomplete[0].stepColor).toBe('yellow')
+    expect(incomplete[0].stepColor).toBe(theme.warn)
 
     const live = buildRows({
       tree: referenceTree({ live: true }), expanded: NONE(), collapsed: NONE(), stepWidth: 66, flat: false, now: T0,
     })
-    expect(live[0].stepColor).not.toBe('red')
-    expect(live[0].stepColor).not.toBe('yellow')
+    expect(live[0].stepColor).not.toBe(theme.err)
+    expect(live[0].stepColor).not.toBe(theme.warn)
 
     const closedUnknown = buildRows({
       tree: referenceTree({ rootStatus: null }), expanded: NONE(), collapsed: NONE(), stepWidth: 66, flat: false,
     })
-    expect(closedUnknown[0].stepColor).not.toBe('red')
+    expect(closedUnknown[0].stepColor).not.toBe(theme.err)
     expect(closedUnknown[0].stepColor).toBeUndefined()
   })
 
@@ -251,7 +252,7 @@ describe('buildRows — live, incomplete and status-null roots (spec §4)', () =
       tree: { root, nodes: [root, dead] }, expanded: NONE(), collapsed: NONE(), stepWidth: 53, flat: false,
     })
     expect(r[0].stepColor).toBeUndefined()     // the trace root: dim, not red
-    expect(r.find((x) => x.node?.id === 2)!.stepColor).toBe('red')   // the request: red
+    expect(r.find((x) => x.node?.id === 2)!.stepColor).toBe(theme.err)   // the request: red
   })
 
   it('every row stays exactly stepWidth cells across live/waiting/unknown-closed states', () => {
@@ -506,7 +507,7 @@ describe('buildRows — colors', () => {
     const ok = r.find((x) => x.node?.id === 15)!
     expect(ok.stepColor).toBeUndefined()
     expect(ok.stepDim).toBe(true)
-    expect(r.find((x) => x.node?.id === 21)!.stepColor).toBe('red')     // 400
+    expect(r.find((x) => x.node?.id === 21)!.stepColor).toBe(theme.err)     // 400
     expect(r.find((x) => x.node?.id === 14)!.stepColor).toBe('magentaBright')
     expect(r[0].stepColor).toBe('#ff7a00')
     expect(r[0].stepBold).toBe(true)

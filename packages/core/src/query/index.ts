@@ -96,6 +96,322 @@ export function entityList(db: StorageDriver, now = Date.now(), windowDays = 30,
   return [...llm, ...general]
 }
 
+// ── Overview dashboard (spec 2026-08-05) ────────────────────────────────────
+
+export type WindowDays = 0 | 7 | 30
+
+export interface OverviewDashboard {
+  /** null iff no LLM call in the window has a known price — unpriced is not free. */
+  llmSpendUsd: number | null
+  llmCalls: number
+  llmPricedCalls: number
+  /** null iff no LLM call reported token usage. */
+  tokens: number | null
+  llmTokenReportingCalls: number
+  mostExpensiveModel: { entity: string; provider: string | null; model: string; costUsd: number; share: number } | null
+  apiCalls: number
+  mostUsedApi: { entity: string; calls: number; share: number } | null
+  failedApiCalls: number
+  /** null iff there are no API calls in the window — 0/0 is not a rate. */
+  apiErrorRate: number | null
+  apiP95LatencyMs: number | null
+}
+
+export interface OverviewEntityRow {
+  entity: string
+  entityClass: 'llm' | 'general'
+  calls: number
+  costUsd: number | null // null when no call in the group has a known price
+  errors: number
+  errorRate: number
+  p95LatencyMs: number | null
+}
+
+const FAILURE = `(status >= 400 OR status IS NULL)`
+
+/** Nearest-rank P95 for one predicate. Two statements (count, then offset
+ *  select) — a live insert between them can move the result by one rank for
+ *  one refresh, which converges on the next poll. OFFSET is acceptable for
+ *  this one scalar; never for paging a request list. */
+function p95Scalar(db: StorageDriver, where: string, params: unknown[]): number | null {
+  const pred = `${where} AND latency_ms IS NOT NULL`
+  const n = db.prepare(`SELECT COUNT(*) c FROM requests WHERE ${pred}`).get(...params).c as number
+  if (n === 0) return null
+  return db.prepare(
+    `SELECT latency_ms v FROM requests WHERE ${pred} ORDER BY latency_ms ASC LIMIT 1 OFFSET ?`)
+    .get(...params, Math.ceil(n * 0.95) - 1).v as number
+}
+
+/** Nearest-rank P95 per group in ONE window-function query — the count/offset
+ *  approach would be N+1 over groups. `(total * 95 + 99) / 100` under SQLite
+ *  integer division is exactly ceil(0.95 · total) in 1-indexed ROW_NUMBER
+ *  terms, matching `p95Scalar`. Keyed by JSON of the partition values so a
+ *  NULL model can't collide with a literal "null" string. */
+function p95ByGroup(
+  db: StorageDriver, cols: string[], where: string, params: unknown[],
+): Map<string, number> {
+  const list = cols.join(', ')
+  const rows = db.prepare(`
+    WITH lr AS (
+      SELECT ${list}, latency_ms,
+             ROW_NUMBER() OVER (PARTITION BY ${list} ORDER BY latency_ms ASC) AS pos,
+             COUNT(*) OVER (PARTITION BY ${list}) AS total
+      FROM requests
+      WHERE ${where} AND latency_ms IS NOT NULL
+    )
+    SELECT ${list}, latency_ms AS p95 FROM lr
+    WHERE pos = (total * 95 + 99) / 100`).all(...params) as any[]
+  const out = new Map<string, number>()
+  for (const r of rows) out.set(JSON.stringify(cols.map((c) => r[c.split('.').pop()!.trim()] ?? null)), r.p95)
+  return out
+}
+
+/** One immutable (time, scope) predicate shared by every statement of a
+ *  single refresh, so no card can disagree with another about the window. */
+function windowScope(
+  opts: { now?: number; windowDays?: WindowDays; scope?: Scope | null },
+): { now: number; sql: string; params: unknown[] } {
+  const now = opts.now ?? Date.now()
+  const s = scopeSql(opts.scope)
+  return {
+    now,
+    sql: `started_at >= ? AND ${s.sql}`,
+    params: [windowStart(now, opts.windowDays ?? 30), ...s.params],
+  }
+}
+
+export function overviewDashboard(
+  db: StorageDriver,
+  opts: { now?: number; windowDays?: WindowDays; scope?: Scope | null } = {},
+): OverviewDashboard {
+  const { sql, params } = windowScope(opts)
+  const llmWhere = `entity_class = 'llm' AND ${sql}`
+  const apiWhere = `entity_class != 'llm' AND ${sql}`
+
+  const llm = db.prepare(
+    `SELECT COUNT(*) calls,
+            COALESCE(SUM(CASE WHEN cost_usd IS NOT NULL THEN 1 ELSE 0 END),0) priced,
+            SUM(cost_usd) spend,
+            COALESCE(SUM(CASE WHEN tokens_in IS NOT NULL OR tokens_out IS NOT NULL THEN 1 ELSE 0 END),0) tokenCalls,
+            COALESCE(SUM(COALESCE(tokens_in,0) + COALESCE(tokens_out,0)),0) tokens
+     FROM requests WHERE ${llmWhere}`).get(...params)
+
+  // Known-price spend by (entity, provider, model); NULL model is excluded from
+  // this card by spec — a price with no model is not a "most expensive model".
+  const top = db.prepare(
+    `SELECT entity, provider, model, SUM(cost_usd) costUsd
+     FROM requests
+     WHERE ${llmWhere} AND cost_usd IS NOT NULL AND model IS NOT NULL
+     GROUP BY entity, provider, model
+     ORDER BY costUsd DESC, entity ASC, model ASC LIMIT 1`).get(...params)
+
+  const api = db.prepare(
+    `SELECT COUNT(*) calls,
+            COALESCE(SUM(CASE WHEN ${FAILURE} THEN 1 ELSE 0 END),0) failed
+     FROM requests WHERE ${apiWhere}`).get(...params)
+
+  const topApi = db.prepare(
+    `SELECT entity, COUNT(*) calls FROM requests WHERE ${apiWhere}
+     GROUP BY entity ORDER BY calls DESC, entity ASC LIMIT 1`).get(...params)
+
+  const llmSpendUsd = llm.priced === 0 ? null : llm.spend as number
+  return {
+    llmSpendUsd,
+    llmCalls: llm.calls,
+    llmPricedCalls: llm.priced,
+    tokens: llm.tokenCalls === 0 ? null : llm.tokens,
+    llmTokenReportingCalls: llm.tokenCalls,
+    mostExpensiveModel: top
+      ? {
+          entity: top.entity, provider: top.provider ?? null, model: top.model, costUsd: top.costUsd,
+          // Share of KNOWN spend — a percentage of unknown spend would be fiction.
+          share: llmSpendUsd ? top.costUsd / llmSpendUsd : 0,
+        }
+      : null,
+    apiCalls: api.calls,
+    mostUsedApi: topApi ? { entity: topApi.entity, calls: topApi.calls, share: topApi.calls / api.calls } : null,
+    failedApiCalls: api.failed,
+    apiErrorRate: api.calls === 0 ? null : api.failed / api.calls,
+    apiP95LatencyMs: p95Scalar(db, apiWhere, params),
+  }
+}
+
+export function overviewEntities(
+  db: StorageDriver,
+  opts: { now?: number; windowDays?: WindowDays; scope?: Scope | null } = {},
+): OverviewEntityRow[] {
+  const { sql, params } = windowScope(opts)
+  const rows = db.prepare(
+    `SELECT entity, entity_class AS entityClass, COUNT(*) AS calls,
+            SUM(CASE WHEN ${FAILURE} THEN 1 ELSE 0 END) AS errors,
+            SUM(CASE WHEN cost_usd IS NOT NULL THEN 1 ELSE 0 END) AS pricedCalls,
+            SUM(cost_usd) AS costUsd
+     FROM requests WHERE ${sql}
+     GROUP BY entity, entity_class`).all(...params) as any[]
+
+  const p95 = p95ByGroup(db, ['entity', 'entity_class'], sql, params)
+  const mapped: OverviewEntityRow[] = rows.map((r) => ({
+    entity: r.entity,
+    entityClass: r.entityClass,
+    calls: r.calls,
+    costUsd: r.pricedCalls === 0 ? null : r.costUsd,
+    errors: r.errors,
+    errorRate: r.errors / r.calls,
+    p95LatencyMs: p95.get(JSON.stringify([r.entity, r.entityClass])) ?? null,
+  }))
+
+  const byEntity = (a: OverviewEntityRow, b: OverviewEntityRow) => a.entity.localeCompare(b.entity)
+  const llm = mapped.filter((r) => r.entityClass === 'llm').sort((a, b) =>
+    (b.costUsd ?? -1) - (a.costUsd ?? -1) || b.calls - a.calls || byEntity(a, b))
+  const general = mapped.filter((r) => r.entityClass !== 'llm').sort((a, b) =>
+    b.calls - a.calls || byEntity(a, b))
+  return [...llm, ...general]
+}
+
+// ── Entity / target drill-down (spec 2026-08-05) ────────────────────────────
+
+/** One filter shared by summary, target table, and request pages, so the three
+ *  views of one drill-down can never disagree about what is in scope.
+ *  `model: null` means "model IS NULL" (an LLM target whose model was never
+ *  parsed); `model: undefined` means no model filter. */
+export interface DetailFilter {
+  entity: string
+  entityClass: 'llm' | 'general'
+  model?: string | null
+  method?: string
+  endpoint?: string
+  now?: number
+  windowDays?: WindowDays
+  scope?: Scope | null
+}
+
+export interface DetailSummary {
+  calls: number
+  pricedCalls: number
+  costUsd: number | null
+  errors: number
+  errorRate: number | null
+  p95LatencyMs: number | null
+  tokens: number | null
+  tokenReportingCalls: number
+}
+
+export interface EntityTargetRow {
+  /** LLM rows: the model (null = calls whose model was never parsed). */
+  model: string | null
+  /** API rows: method + normalized endpoint. */
+  method: string | null
+  endpoint: string | null
+  calls: number
+  costUsd: number | null
+  errors: number
+  errorRate: number
+  p95LatencyMs: number | null
+}
+
+export interface DetailRequestRow {
+  id: number
+  startedAt: number
+  status: number | null
+  method: string
+  normalizedEndpoint: string
+  costUsd: number | null
+  latencyMs: number | null
+}
+
+/** Values are always bound (`?`), never interpolated. */
+function detailSql(f: DetailFilter): { sql: string; params: unknown[] } {
+  const ws = windowScope(f)
+  const parts = [f.entityClass === 'llm' ? `entity_class = 'llm'` : `entity_class != 'llm'`, `entity = ?`]
+  const p: unknown[] = [f.entity]
+  if (f.model !== undefined) {
+    if (f.model === null) parts.push(`model IS NULL`)
+    else { parts.push(`model = ?`); p.push(f.model) }
+  }
+  if (f.method !== undefined && f.endpoint !== undefined) {
+    parts.push(`method = ? AND normalized_endpoint = ?`)
+    p.push(f.method, f.endpoint)
+  }
+  parts.push(ws.sql)
+  p.push(...ws.params)
+  return { sql: parts.join(' AND '), params: p }
+}
+
+export function detailSummary(db: StorageDriver, filter: DetailFilter): DetailSummary {
+  const { sql, params } = detailSql(filter)
+  const agg = db.prepare(
+    `SELECT COUNT(*) calls,
+            COALESCE(SUM(CASE WHEN cost_usd IS NOT NULL THEN 1 ELSE 0 END),0) priced,
+            SUM(cost_usd) spend,
+            COALESCE(SUM(CASE WHEN ${FAILURE} THEN 1 ELSE 0 END),0) errors,
+            COALESCE(SUM(CASE WHEN tokens_in IS NOT NULL OR tokens_out IS NOT NULL THEN 1 ELSE 0 END),0) tokenCalls,
+            COALESCE(SUM(COALESCE(tokens_in,0) + COALESCE(tokens_out,0)),0) tokens
+     FROM requests WHERE ${sql}`).get(...params)
+  return {
+    calls: agg.calls,
+    pricedCalls: agg.priced,
+    costUsd: agg.priced === 0 ? null : agg.spend,
+    errors: agg.errors,
+    errorRate: agg.calls === 0 ? null : agg.errors / agg.calls,
+    p95LatencyMs: p95Scalar(db, sql, params),
+    tokens: agg.tokenCalls === 0 ? null : agg.tokens,
+    tokenReportingCalls: agg.tokenCalls,
+  }
+}
+
+/** Child rows of an entity: models for an LLM entity, method+endpoint pairs
+ *  for an API one. Bounded cardinality — no paging here. */
+export function entityTargets(db: StorageDriver, filter: DetailFilter): EntityTargetRow[] {
+  const { sql, params } = detailSql(filter)
+  const llm = filter.entityClass === 'llm'
+  const groupCols = llm ? ['model'] : ['method', 'normalized_endpoint']
+  const list = groupCols.join(', ')
+  const rows = db.prepare(
+    `SELECT ${list}, COUNT(*) calls,
+            SUM(CASE WHEN ${FAILURE} THEN 1 ELSE 0 END) errors,
+            SUM(CASE WHEN cost_usd IS NOT NULL THEN 1 ELSE 0 END) pricedCalls,
+            SUM(cost_usd) costUsd
+     FROM requests WHERE ${sql} GROUP BY ${list}`).all(...params) as any[]
+
+  const p95 = p95ByGroup(db, groupCols, sql, params)
+  const mapped: EntityTargetRow[] = rows.map((r) => ({
+    model: llm ? r.model ?? null : null,
+    method: llm ? null : r.method,
+    endpoint: llm ? null : r.normalized_endpoint,
+    calls: r.calls,
+    costUsd: r.pricedCalls === 0 ? null : r.costUsd,
+    errors: r.errors,
+    errorRate: r.errors / r.calls,
+    p95LatencyMs: p95.get(JSON.stringify(groupCols.map((c) => r[c] ?? null))) ?? null,
+  }))
+  return llm
+    ? mapped.sort((a, b) => (b.costUsd ?? -1) - (a.costUsd ?? -1) || b.calls - a.calls
+        || (a.model ?? '').localeCompare(b.model ?? ''))
+    : mapped.sort((a, b) => b.calls - a.calls
+        || `${a.method} ${a.endpoint}`.localeCompare(`${b.method} ${b.endpoint}`))
+}
+
+/** One page of a target's requests, newest first. Keyset cursor over
+ *  (started_at, id) — never OFFSET — so a 40k-request window stays usable. */
+export function detailRequestPage(
+  db: StorageDriver,
+  filter: DetailFilter & { beforeStartedAt?: number; beforeId?: number; limit?: number },
+): DetailRequestRow[] {
+  const { sql, params } = detailSql(filter)
+  const hasCursor = filter.beforeStartedAt != null && filter.beforeId != null
+  const cursor = hasCursor ? ` AND (started_at < ? OR (started_at = ? AND id < ?))` : ''
+  const cursorParams = hasCursor
+    ? [filter.beforeStartedAt, filter.beforeStartedAt, filter.beforeId]
+    : []
+  return db.prepare(
+    `SELECT id, started_at AS startedAt, status, method,
+            normalized_endpoint AS normalizedEndpoint,
+            cost_usd AS costUsd, latency_ms AS latencyMs
+     FROM requests WHERE ${sql}${cursor}
+     ORDER BY started_at DESC, id DESC LIMIT ?`)
+    .all(...params, ...cursorParams, filter.limit ?? 50) as DetailRequestRow[]
+}
+
 export interface UsageRow {
   hostname: string
   method: string

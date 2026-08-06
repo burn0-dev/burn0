@@ -43,14 +43,20 @@ export function TableHeader({ cols, widths }: { cols: ColDef[]; widths: number[]
   )
 }
 
-export function TableRow({ cells, cols, widths, selected = false }: {
+export function TableRow({ cells, cols, widths, selected = false, selectedBg }: {
   cells: Cell[]
   cols: ColDef[]
   widths: number[]
   selected?: boolean
+  /** Selection as a background tint instead of full inverse video. */
+  selectedBg?: string
 }) {
   return (
-    <Text inverse={selected} wrap="truncate">
+    <Text
+      inverse={selected && !selectedBg}
+      backgroundColor={selected && selectedBg ? selectedBg : undefined}
+      wrap="truncate"
+    >
       {cells.map((cell, i) => (
         <React.Fragment key={i}>
           <Text color={cell.color} bold={cell.bold} dimColor={cell.dim}>
@@ -63,11 +69,16 @@ export function TableRow({ cells, cols, widths, selected = false }: {
   )
 }
 
-export function Card({ label, value, color }: { label: string; value: string; color?: string }) {
+export function Card({ label, value, color, detail }: {
+  label: string; value: string; color?: string
+  /** Muted coverage line, e.g. `priced 3/5 calls`. Omitted = 2-line card. */
+  detail?: string
+}) {
   return (
     <Box borderStyle="round" borderColor="gray" flexDirection="column" paddingX={1} flexGrow={1} flexBasis={0}>
       <Text dimColor wrap="truncate">{label}</Text>
       <Text bold color={color} wrap="truncate">{value}</Text>
+      {detail != null && <Text dimColor wrap="truncate">{detail}</Text>}
     </Box>
   )
 }
