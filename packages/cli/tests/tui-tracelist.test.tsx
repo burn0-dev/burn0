@@ -6,8 +6,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, ensureProject, insertRun, createWriter, type StorageDriver } from '@burn0/core'
 import type { PendingTrace, EnrichedRow } from '@burn0/core'
+import { useInput } from 'ink'
 import { TraceListScreen } from '../src/tui/screens/TraceList.js'
-import { TraceView } from '../src/tui/screens/TraceView.js'
+import { TraceView, type TreeUiState } from '../src/tui/screens/TraceView.js'
+import { DebugScreen } from '../src/tui/screens/Debug.js'
+import { workspaceLayout } from '../src/tui/workspace-layout.js'
 import { FooterContext } from '../src/tui/footer.js'
 import { baseRow } from './helpers/seed.js'
 
@@ -68,11 +71,35 @@ function seeded(): { db: StorageDriver; rootId: number } {
 }
 
 const noop = () => {}
+const V = { columns: 100, rows: 24 }
+
+/** Compat harness: the workspace (TraceList) normally owns geometry, focus and
+ *  the request-detail child state — this stand-in supplies the same surface so
+ *  the tree tests can keep driving TraceView directly. */
+function Harness({ db, traceId, columns, now }: {
+  db: StorageDriver; traceId: number; columns: number; now?: number
+}) {
+  const layout = workspaceLayout(columns)
+  const cache = React.useRef(new Map<number, TreeUiState>())
+  const [openReq, setOpenReq] = React.useState<number | null>(null)
+  useInput((_i, key) => { if (key.escape) setOpenReq(null) })
+  if (openReq != null) {
+    return <DebugScreen db={db} requestId={openReq} viewport={{ columns, rows: 40 }} />
+  }
+  return (
+    <TraceView
+      db={db} traceId={traceId} width={columns} height={20}
+      treeWidth={layout.inspector != null ? layout.tree : columns}
+      inspectorWidth={layout.inspector}
+      focus="tree" now={now} cache={cache} onOpenRequest={setOpenReq}
+    />
+  )
+}
 
 describe('TraceListScreen', () => {
   it('shows one uniform row per trace, with its shape', async () => {
     const { db } = seeded()
-    const { lastFrame } = render(<TraceListScreen db={db} onOpenRequest={noop} />)
+    const { lastFrame } = render(<TraceListScreen db={db} viewport={V} onOpenRequest={noop} />)
     await tick()
     const f = lastFrame()!
     expect(f).toContain('POST /api/chat')
@@ -92,7 +119,7 @@ describe('TraceListScreen', () => {
       { opened: [trace({ localId: 1, name: 'POST /api/chat' })], closed: [] },
       [llm({ startedAt: T0 + 10, trace: { localId: 1, seq: 0 }, tokensIn: null, tokensOut: 846 })],
     )
-    const { lastFrame } = render(<TraceListScreen db={db} onOpenRequest={noop} />)
+    const { lastFrame } = render(<TraceListScreen db={db} viewport={V} onOpenRequest={noop} />)
     await tick()
     const f = lastFrame()!
     expect(f).toContain('— → 846')
@@ -101,7 +128,7 @@ describe('TraceListScreen', () => {
 
   it('opens a trace and shows its calls nested under it', async () => {
     const { db } = seeded()
-    const { lastFrame, stdin } = render(<TraceListScreen db={db} onOpenRequest={noop} />)
+    const { lastFrame, stdin } = render(<TraceListScreen db={db} viewport={V} onOpenRequest={noop} />)
     await tick()
     stdin.write('\r')
     await tick()
@@ -117,7 +144,7 @@ describe('TraceListScreen', () => {
     const projectId = ensureProject(db, { key: 'path:/y', name: 'script', rootPath: '/y', gitRoot: null })
     createWriter(db, { projectId, runId: null, service: null, capturePayloads: false })
       .write({ opened: [], closed: [] }, [llm({ startedAt: T0, trace: null })])
-    const { lastFrame } = render(<TraceListScreen db={db} onOpenRequest={noop} />)
+    const { lastFrame } = render(<TraceListScreen db={db} viewport={V} onOpenRequest={noop} />)
     await tick()
     // the untraced call is still listed, labelled by model — nothing hidden
     expect(lastFrame()).toContain('gpt-4o')
@@ -125,7 +152,7 @@ describe('TraceListScreen', () => {
 
   it('f toggles the flat chronological list', async () => {
     const { db } = seeded()
-    const { lastFrame, stdin } = render(<TraceListScreen db={db} onOpenRequest={noop} />)
+    const { lastFrame, stdin } = render(<TraceListScreen db={db} viewport={V} onOpenRequest={noop} />)
     await tick()
     expect(lastFrame()).toContain('POST /api/chat')
     stdin.write('f')
@@ -139,7 +166,7 @@ describe('TraceListScreen', () => {
   it('the flat sub-view claims its own accurate footer, not the trace-list one (review round 1, Finding 2)', async () => {
     const { db } = seeded()
     const { footer, Provider } = footerCapture()
-    const { stdin } = render(<Provider><TraceListScreen db={db} onOpenRequest={noop} /></Provider>)
+    const { stdin } = render(<Provider><TraceListScreen db={db} viewport={V} onOpenRequest={noop} /></Provider>)
     await tick()
     // Before toggling: the trace-list's own footer, "⏎ open trace" — correct
     // here, since ⏎ on this table opens a trace, not a request payload.
@@ -164,7 +191,7 @@ describe('TraceListScreen', () => {
     createWriter(db, { projectId, runId, service: null, capturePayloads: false })
       .write({ opened: [trace({ localId: 1, name: 'GET /health' })], closed: [] },
         [api({ startedAt: T0, trace: { localId: 1, seq: 0 } })])
-    const { lastFrame } = render(<TraceListScreen db={db} onOpenRequest={noop} />)
+    const { lastFrame } = render(<TraceListScreen db={db} viewport={V} onOpenRequest={noop} />)
     await tick()
     expect(lastFrame()).not.toContain('$0.00')
     expect(lastFrame()).toContain('—')
@@ -174,7 +201,7 @@ describe('TraceListScreen', () => {
 describe('TraceView', () => {
   it('indents the tree and keeps numeric columns aligned across depths', async () => {
     const { db, rootId } = seeded()
-    const { lastFrame } = render(<TraceView db={db} traceId={rootId} columns={100} onBack={noop} />)
+    const { lastFrame } = render(<Harness db={db} traceId={rootId} columns={100} />)
     await tick()
     const lines = lastFrame()!.split('\n')
     const rootLine = lines.find((l) => l.includes('POST /api/chat'))!
@@ -186,24 +213,24 @@ describe('TraceView', () => {
 
   it('uses two panes when the terminal is wide enough', async () => {
     const { db, rootId } = seeded()
-    const wide = render(<TraceView db={db} traceId={rootId} columns={130} onBack={noop} />)
+    const wide = render(<Harness db={db} traceId={rootId} columns={130} />)
     await tick()
-    // The detail card — a bordered box beside the tree, with the root card's
-    // pricing-coverage line inside it.
-    expect(wide.lastFrame()).toContain('╭')
+    // The inspector — a full-height pane beside the tree, with the root
+    // card's pricing-coverage line inside it.
+    expect(wide.lastFrame()).toContain('DETAIL')
     expect(wide.lastFrame()).toContain('calls priced')
 
-    // Ink has no layout query, so this is a manual branch — below 110 columns
-    // the detail pane would squeeze the tree into unreadability
-    const narrow = render(<TraceView db={db} traceId={rootId} columns={90} onBack={noop} />)
+    // Below 110 columns the inspector would squeeze the tree into
+    // unreadability, so the layout drops to a single pane.
+    const narrow = render(<Harness db={db} traceId={rootId} columns={90} />)
     await tick()
-    expect(narrow.lastFrame()).not.toContain('╭')
+    expect(narrow.lastFrame()).not.toContain('DETAIL')
   })
 
   it('the detail pane follows the selection', async () => {
     const { db, rootId } = seeded()
     const { lastFrame, stdin } = render(
-      <TraceView db={db} traceId={rootId} columns={130} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={130} />)
     await tick()
     stdin.write(DOWN)   // onto retrieve-context
     await tick()
@@ -233,7 +260,7 @@ describe('TraceView', () => {
     ])
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
 
-    const { lastFrame } = render(<TraceView db={db} traceId={rootId} columns={100} onBack={noop} />)
+    const { lastFrame } = render(<Harness db={db} traceId={rootId} columns={100} />)
     await tick()
     const lines = lastFrame()!.split('\n')
     const toolLine = lines.find((l) => l.includes('search_orders'))!
@@ -260,7 +287,7 @@ describe('TraceView', () => {
     }, [api({ startedAt: T0 + 150, status: 200, trace: { localId: 1, seq: 0 } })])
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
 
-    const { lastFrame } = render(<TraceView db={db} traceId={rootId} columns={100} onBack={noop} />)
+    const { lastFrame } = render(<Harness db={db} traceId={rootId} columns={100} />)
     await tick()
     // every HTTP call returned 200; the failure is only visible on the tool
     expect(lastFrame()).toContain('error')
@@ -269,7 +296,7 @@ describe('TraceView', () => {
   it('opens the request under the cursor inline (payload-as-child), and esc returns to the same row', async () => {
     const { db, rootId } = seeded()
     const { lastFrame, stdin } = render(
-      <TraceView db={db} traceId={rootId} columns={130} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={130} />)
     await tick()
     stdin.write(DOWN); await tick()
     stdin.write(DOWN); await tick()   // a request node (the Pinecone call)
@@ -279,7 +306,7 @@ describe('TraceView', () => {
     // second mount: the tree's own content is simply gone from this frame,
     // and the request's own payload (DebugScreen) is up instead.
     expect(lastFrame()).not.toContain('retrieve-context')
-    expect(lastFrame()).toContain('Request headers')
+    expect(lastFrame()).toContain('Summary')          // the tabbed detail chrome
     stdin.write(ESC); await tick()
     // back to the tree, same row still selected — cursor/expansion intact.
     expect(lastFrame()).toContain('retrieve-context')

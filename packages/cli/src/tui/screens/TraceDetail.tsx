@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react'
-import { Box, Text } from 'ink'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Box, Text, useInput } from 'ink'
 import {
   query, loadConfig, redactQueryString, detectEntity,
   type StorageDriver, type TraceTreeNode,
@@ -840,23 +840,27 @@ function infoCard(row: DisplayRow, inner: number): Line[] {
 // Component
 // ---------------------------------------------------------------------------
 
-export function TraceDetail({ row, nodes = [], db, width, height, retention, now }: {
+/** Preview caps govern the card; this is only a runaway backstop so a
+ *  pathological payload cannot build tens of thousands of Line objects. */
+const BUILD_BUDGET = 300
+
+export function TraceDetail({ row, nodes = [], db, width, height, focused = false, retention, now, onOpenRequest }: {
   row: DisplayRow | undefined
   /** The whole `traceTree` node list — the root and fold cards summarise rows
    *  that are already in memory rather than re-querying per poll. */
   nodes?: TraceTreeNode[]
   db: StorageDriver
   width: number
+  /** Content rows this pane owns below the workspace's pane-header row. */
   height: number
+  /** Focused = this pane holds ↑↓ (body scroll) and ⏎ (full detail). */
+  focused?: boolean
   retention?: Retention
   now?: number
+  onOpenRequest?: (id: number) => void
 }) {
-  const inner = Math.max(8, width - 4)
-  // Spec §3, end to end: B = max(12, rows − 12); content C = B − 5. `height` is
-  // the terminal's row count, so the −12 (the chrome the screen spends on tabs,
-  // header, footer and the tree pane's own margins) is subtracted HERE — the
-  // one place that knows it is a row count and not a budget.
-  const content = Math.max(4, Math.max(12, height - 12) - 5)
+  const inner = Math.max(8, width - 1)
+  const content = BUILD_BUDGET
 
   const node = row?.kind === 'node' ? row.node : undefined
   const requestId = node?.type === 'request' ? node.requestId : null
@@ -884,12 +888,19 @@ export function TraceDetail({ row, nodes = [], db, width, height, retention, now
     [db, toolId, node?.endedAt, node?.toolStatus],
   )
 
-  if (!row) return null
+  // Scroll belongs to the pane, not the card: the fixed part is the pane
+  // header and the identity (title) line; everything below scrolls when the
+  // inspector holds focus. Reset when the selection moves to another row.
+  const [scroll, setScroll] = useState(0)
+  const rowIdentity = row?.key ?? null
+  useEffect(() => { setScroll(0) }, [rowIdentity])
+
   const r = retention ?? readerRetention()
   const clock = now ?? Date.now()
 
   let lines: Line[] = []
-  if (row.kind === 'fold') lines = foldCard(row.members ?? [], inner)
+  if (!row) lines = []
+  else if (row.kind === 'fold') lines = foldCard(row.members ?? [], inner)
   else if (row.kind === 'info') lines = infoCard(row, inner)
   else if (node?.type === 'trace') lines = traceCard({ node, nodes, inner, budget: content, now: clock })
   else if (node?.type === 'tool') lines = toolCard({ node, io, inner, budget: content, retention: r, now: clock })
@@ -898,38 +909,41 @@ export function TraceDetail({ row, nodes = [], db, width, height, retention, now
   } else if (node?.type === 'request') {
     lines = apiCard({ node, detail, inner, retention: r, now: clock })
   }
+  const capped = lines.slice(0, BUILD_BUDGET)
+
+  const fixed = capped.slice(0, 1)                      // identity/title line
+  const body = capped.slice(1)
+  const bodyRows = Math.max(2, height - 1 - fixed.length)
+  const maxScroll = Math.max(0, body.length - bodyRows)
+  const top = Math.min(scroll, maxScroll)
+
+  useInput((_input, key) => {
+    if (!focused) return
+    if (key.upArrow) setScroll(Math.max(0, top - 1))
+    if (key.downArrow) setScroll(Math.min(maxScroll, top + 1))
+    if (key.pageUp) setScroll(Math.max(0, top - bodyRows))
+    if (key.pageDown) setScroll(Math.min(maxScroll, top + bodyRows))
+    if (key.return && row?.requestId != null) onOpenRequest?.(row.requestId)
+  })
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} width={width}>
-      {fitCard(lines, content, requestId != null).map((l, i) => <LineView key={i} line={l} inner={inner} />)}
+    <Box flexDirection="column" width={width}>
+      <Text wrap="truncate">
+        <Text bold color={focused ? theme.accentSoft : undefined} dimColor={!focused}>
+          {padCell('DETAIL', Math.max(0, inner - (maxScroll > 0 ? 5 : 0)))}
+        </Text>
+        {maxScroll > 0 && <Text dimColor>{padCell(top >= maxScroll ? ' end' : ` +${body.length - bodyRows - top}`, 5)}</Text>}
+      </Text>
+      {row == null
+        ? <Text dimColor>select a row</Text>
+        : (
+          <>
+            {fixed.map((l, i) => <LineView key={`f${i}`} line={l} inner={inner} />)}
+            {body.slice(top, top + bodyRows).map((l, i) => <LineView key={`b${top + i}`} line={l} inner={inner} />)}
+          </>
+        )}
     </Box>
   )
-}
-
-/** The last word on the height budget. The LLM card allocates against `C` line
- *  by line, but the cards that are just as long as their data (a tool's ARGS, a
- *  root's issue list) need a backstop, and Ink does not clip — a card that
- *  overran would paint over the tree pane's own rows.
- *
- *  Elaboration goes first, from the bottom up: losing `written 0` costs a
- *  detail, losing the `issues` line costs the reason the user opened the trace.
- *  Only then does the tail truncate, and what it dropped is stated. */
-function fitCard(lines: Line[], budget: number, hasPayload = false): Line[] {
-  if (lines.length <= budget) return lines
-  const kept = [...lines]
-  for (let i = kept.length - 1; i >= 0 && kept.length > budget; i--) {
-    if (kept[i].optional) kept.splice(i, 1)
-  }
-  if (kept.length <= budget) return kept
-  if (budget <= 1) return kept.slice(0, Math.max(0, budget))
-  // The ⏎ hint only where ⏎ actually opens something — on a trace root or
-  // fold row the key is a toggle/no-op, and instructing a dead action is a
-  // small lie (final-review F6).
-  const hint = hasPayload ? ' · ⏎ opens the payload' : ''
-  return [
-    ...kept.slice(0, budget - 1),
-    L(`+${kept.length - (budget - 1)} more lines${hint}`, { dim: true }),
-  ]
 }
 
 /** Every line is padded to the full inner width before it is handed to Ink.

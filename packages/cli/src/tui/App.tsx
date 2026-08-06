@@ -36,7 +36,23 @@ const ALL_PROJECTS: ResolvedScope = {
   scope: { projectIds: null, services: null }, label: 'all projects', fellBack: false, projects: [],
 }
 
-export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; scope?: ResolvedScope }) {
+/** The one authoritative content rectangle (workspace spec, layout contract):
+ *  what remains inside App's paddingX={1} and between its rules. Screens size
+ *  against THIS, never the raw terminal — the shell's cells are not theirs. */
+export interface Viewport {
+  columns: number
+  rows: number
+}
+
+/** App's vertical chrome: header + rule + content marginTop + rule + footer. */
+const CHROME_ROWS = 5
+
+export function App({ db, scope: initial = ALL_PROJECTS, size }: {
+  db: StorageDriver
+  scope?: ResolvedScope
+  /** Test seam — forces the terminal size the way TraceView tests force columns. */
+  size?: { columns: number; rows: number }
+}) {
   const { exit } = useApp()
   const [tab, setTab] = useState(0)
   // Overview → entity → target → request drill-down. `dashboard` is the tab
@@ -54,7 +70,10 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
   // null = every project. Cycled by `p`; starts at whatever the CLI resolved.
   const [projectId, setProjectId] = useState<number | null>(initial.scope.projectIds?.[0] ?? null)
   const [service, setService] = useState<string | null>(initial.scope.services?.[0] ?? null)
-  const { columns, rows } = useTermSize()
+  const term = useTermSize()
+  const columns = size?.columns ?? term.columns
+  const rows = size?.rows ?? term.rows
+  const viewport: Viewport = { columns: columns - 2, rows: Math.max(3, rows - CHROME_ROWS) }
 
   const scope: Scope = { projectIds: projectId == null ? null : [projectId], services: service ? [service] : null }
   const stats = usePoll(() => query.dbStats(db, scope), 1000, [projectId, service])
@@ -146,7 +165,7 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
         <Rule columns={columns - 2} />
         <Box flexDirection="column" flexGrow={1} marginTop={1}>
           {route.kind === 'request' ? (
-            <DebugScreen db={db} requestId={route.requestId} />
+            <DebugScreen db={db} requestId={route.requestId} viewport={viewport} />
           ) : route.kind === 'entity' ? (
             <EntityDetailScreen
               db={db} scope={scope} windowDays={windowDays}
@@ -175,7 +194,12 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
                 />
               )}
               {tab === 1 && <UsageScreen db={db} scope={scope} />}
-              {tab === 2 && <TraceListScreen db={db} scope={scope} onOpenRequest={openDebug} />}
+              {tab === 2 && (
+                <TraceListScreen
+                  db={db} scope={scope} viewport={viewport}
+                  onSubFocus={setSubFocus} onOpenRequest={openDebug}
+                />
+              )}
               {tab === 3 && <TracesScreen db={db} scope={scope} llm={false} onOpen={openDebug} />}
               {tab === 4 && <LogsScreen db={db} scope={scope} onOpen={openDebug} />}
             </>
@@ -183,11 +207,11 @@ export function App({ db, scope: initial = ALL_PROJECTS }: { db: StorageDriver; 
         </Box>
         <Rule columns={columns - 2} />
         <Box>
-          {/* Exactly one footer line, always: a request overlay forces its
-             own; otherwise the active screen's `useFooter` claim wins over
-             this tab's static default. */}
+          {/* Exactly one footer line, always: the active screen's `useFooter`
+             claim wins over this tab's static default; the request overlay's
+             own claim (its tab bar keys) wins over the plain esc fallback. */}
           <Text dimColor>{route.kind === 'request'
-            ? 'q quit · esc back'
+            ? footerOverride ?? 'q quit · esc back'
             : `${footerOverride ?? FOOTERS[tab]}${projects.length > 1 && route.kind === 'dashboard' ? ' · p project' : ''}${services.length > 1 && route.kind === 'dashboard' ? ' · s service' : ''}`}</Text>
         </Box>
       </Box>

@@ -5,22 +5,37 @@ import { DebugScreen } from '../src/tui/screens/Debug.js'
 import { seedDb } from './helpers/seed.js'
 import { query } from '@burn0/core'
 
+const tick = (ms = 25) => new Promise((r) => setTimeout(r, ms))
+const RIGHT = '\u001B[C'
+const V = { columns: 100, rows: 30 }
+
 describe('DebugScreen', () => {
   it('prompts when nothing selected', () => {
     const { db } = seedDb([])
     expect(render(<DebugScreen db={db} requestId={null} />).lastFrame()).toContain('Select a request')
   })
-  it('renders full request detail with waterfall, bodies, stack, tags', () => {
+  it('Summary/Metadata/Raw split the detail: waterfall and tags up front, stack and bodies behind tabs', async () => {
     const { db } = seedDb([{ tags: { userId: 'u9' }, resTruncated: true }])
     const id = query.traces(db, { llm: true })[0].id
-    const f = render(<DebugScreen db={db} requestId={id} />).lastFrame()!
-    expect(f).toContain('POST')
-    expect(f).toContain('api.openai.com')
-    expect(f).toContain('first byte')
-    expect(f).toContain('{"model":"gpt-4o"}')
-    expect(f).toContain('[truncated at 1MB]')
-    expect(f).toContain('server.js:10')
-    expect(f).toContain('u9')
+    const { lastFrame, stdin } = render(<DebugScreen db={db} requestId={id} viewport={V} />)
+    await tick()
+    const summary = lastFrame()!
+    expect(summary).toContain('POST')
+    expect(summary).toContain('api.openai.com')
+    expect(summary).toContain('first byte')
+    expect(summary).toContain('u9')
+    // Raw bodies never render on the default surface.
+    expect(summary).not.toContain('"model": "gpt-4o"')
+
+    stdin.write(RIGHT); await tick()   // Input
+    stdin.write(RIGHT); await tick()   // Output
+    stdin.write(RIGHT); await tick()   // Metadata
+    expect(lastFrame()).toContain('server.js:10')
+
+    stdin.write(RIGHT); await tick()   // Raw
+    const raw = lastFrame()!
+    expect(raw).toContain('"model": "gpt-4o"')   // pretty-printed, bounded
+    expect(raw).toContain('truncated at 1MB')
   })
 })
 
@@ -88,7 +103,7 @@ describe('DebugScreen — URL redaction (spec §6)', () => {
 })
 
 describe('DebugScreen LLM conversation section (task 15: chat-style, full transcript)', () => {
-  it('shows the full conversation in order — system, user, assistant', () => {
+  it('shows the full conversation in order — system, user, assistant', async () => {
     const { db } = seedDb([{
       model: 'gpt-4o', tokensIn: 120, tokensOut: 40, costUsd: 0.004,
       reqBody: JSON.stringify({ model: 'gpt-4o', messages: [
@@ -100,17 +115,24 @@ describe('DebugScreen LLM conversation section (task 15: chat-style, full transc
       ], usage: { prompt_tokens: 120, completion_tokens: 40 } }),
     }])
     const id = query.traces(db, { llm: true })[0].id
-    const f = render(<DebugScreen db={db} requestId={id} />).lastFrame()!
-    expect(f).toContain('SYSTEM')
-    expect(f).toContain('be brief')
-    expect(f).toContain('USER')
-    expect(f).toContain('What is the CAP theorem?')
-    expect(f).toContain('ASSISTANT')
-    expect(f).toContain('Pick two of consistency')
-    expect(f).toContain('tokens  120 → 40')
+    const { lastFrame, stdin } = render(<DebugScreen db={db} requestId={id} viewport={V} />)
+    await tick()
+    // Summary: the human exchange and token head are immediately visible.
+    const summary = lastFrame()!
+    expect(summary).toContain('USER')
+    expect(summary).toContain('What is the CAP theorem?')
+    expect(summary).toContain('ASSISTANT')
+    expect(summary).toContain('Pick two of consistency')
+    expect(summary).toContain('tokens  120 → 40')
+    // Input: the request side, with the system prompt collapsed to a summary.
+    stdin.write(RIGHT); await tick()
+    const input = lastFrame()!
+    expect(input).toContain('SYSTEM')
+    expect(input).toContain('be brief')
+    expect(input).toContain('What is the CAP theorem?')
   })
 
-  it('a tool-call-only response never renders empty — shows the → name(args) line', () => {
+  it('a tool-call-only response never renders empty — shows the → name(args) line', async () => {
     const { db } = seedDb([{
       model: 'gpt-4o', tokensIn: 50, tokensOut: 10,
       reqBody: JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'user', content: 'where is my order' }] }),
@@ -122,11 +144,14 @@ describe('DebugScreen LLM conversation section (task 15: chat-style, full transc
       }),
     }])
     const id = query.traces(db, { llm: true })[0].id
-    const f = render(<DebugScreen db={db} requestId={id} />).lastFrame()!
-    expect(f).toContain('→ search_orders({"id":42})')
+    const { lastFrame, stdin } = render(<DebugScreen db={db} requestId={id} viewport={V} />)
+    await tick()
+    stdin.write(RIGHT); await tick()   // Input
+    stdin.write(RIGHT); await tick()   // Output
+    expect(lastFrame()).toContain('→ search_orders({"id":42})')
   })
 
-  it('tool results render with ✓/✗, name and bytes', () => {
+  it('tool results render with ✓/✗, name and bytes', async () => {
     const { db } = seedDb([{
       model: 'gpt-4o', tokensIn: 50, tokensOut: 10,
       reqBody: JSON.stringify({
@@ -141,8 +166,10 @@ describe('DebugScreen LLM conversation section (task 15: chat-style, full transc
       resBody: JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'It shipped.' } }] }),
     }])
     const id = query.traces(db, { llm: true })[0].id
-    const f = render(<DebugScreen db={db} requestId={id} />).lastFrame()!
-    expect(f).toContain('TOOL RESULT ✓ search_orders')
+    const { lastFrame, stdin } = render(<DebugScreen db={db} requestId={id} viewport={V} />)
+    await tick()
+    stdin.write(RIGHT); await tick()   // Input — the request side carries the result
+    expect(lastFrame()).toContain('TOOL RESULT ✓ search_orders')
   })
 
   it('replaces the ", N cached" phrasing with the fresh/cached/written token block', () => {

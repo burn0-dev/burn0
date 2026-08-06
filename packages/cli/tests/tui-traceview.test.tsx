@@ -8,7 +8,11 @@ import {
   openDatabase, ensureProject, insertRun, createWriter, type StorageDriver,
 } from '@burn0/core'
 import type { PendingTrace, EnrichedRow } from '@burn0/core'
-import { TraceView, computeLayout } from '../src/tui/screens/TraceView.js'
+import { useInput } from 'ink'
+import { TraceView, type TreeUiState } from '../src/tui/screens/TraceView.js'
+import { DebugScreen } from '../src/tui/screens/Debug.js'
+import { workspaceLayout, treeColumns } from '../src/tui/workspace-layout.js'
+import { TraceListScreen } from '../src/tui/screens/TraceList.js'
 import { FooterContext, NAV } from '../src/tui/footer.js'
 import { baseRow, seedDb } from './helpers/seed.js'
 
@@ -20,6 +24,29 @@ const DOWN = '\u001B[B'
 const ESC = '\u001B'
 
 const noop = () => {}
+
+/** Compat harness: the workspace (TraceList) normally owns geometry, focus and
+ *  the request-detail child state — this stand-in supplies the same surface so
+ *  the tree tests can keep driving TraceView directly. */
+function Harness({ db, traceId, columns, now }: {
+  db: StorageDriver; traceId: number; columns: number; now?: number
+}) {
+  const layout = workspaceLayout(columns)
+  const cache = React.useRef(new Map<number, TreeUiState>())
+  const [openReq, setOpenReq] = React.useState<number | null>(null)
+  useInput((_i, key) => { if (key.escape) setOpenReq(null) })
+  if (openReq != null) {
+    return <DebugScreen db={db} requestId={openReq} viewport={{ columns, rows: 40 }} />
+  }
+  return (
+    <TraceView
+      db={db} traceId={traceId} width={columns} height={20}
+      treeWidth={layout.inspector != null ? layout.tree : columns}
+      inspectorWidth={layout.inspector}
+      focus="tree" now={now} cache={cache} onOpenRequest={setOpenReq}
+    />
+  )
+}
 
 /** The detail pane repeats the selected row's identity, so "the cursor is on X"
  *  is observable as X appearing twice — once in the tree, once in the card. */
@@ -144,7 +171,7 @@ describe('TraceView (tree-model)', () => {
   it('renders the reference trace: fold row, turn ordinals, ↺, guide glyphs', async () => {
     const { db, rootId } = seedReferenceLikeTrace()
     const { lastFrame } = render(
-      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={140} />)
     await tick()
     const f = lastFrame()!
     expect(f).toContain('12× GET')
@@ -161,7 +188,7 @@ describe('TraceView (tree-model)', () => {
     // ⏎ on the fold expands it in place, revealing its members.
     {
       const { lastFrame, stdin } = render(
-        <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+        <Harness db={db} traceId={rootId} columns={140} />)
       await tick()
       expect(lastFrame()).not.toContain('MATERIAL_STOCK')
       stdin.write(DOWN); await tick()     // root -> fold
@@ -172,7 +199,7 @@ describe('TraceView (tree-model)', () => {
     // h on an open tool collapses its children.
     {
       const { lastFrame, stdin } = render(
-        <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+        <Harness db={db} traceId={rootId} columns={140} />)
       await tick()
       stdin.write(DOWN); await tick()   // root -> fold
       stdin.write(DOWN); await tick()   // fold -> turn #1
@@ -215,7 +242,7 @@ describe('TraceView (tree-model)', () => {
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
 
     const { lastFrame, stdin } = render(
-      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={140} />)
     await tick()
     // root -> lookup_orders -> its child -> lookup_customers
     stdin.write(DOWN); await tick()
@@ -240,7 +267,7 @@ describe('TraceView (tree-model)', () => {
   it('f toggles flat mode and back', async () => {
     const { db, rootId } = seedReferenceLikeTrace()
     const { lastFrame, stdin } = render(
-      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={140} />)
     await tick()
     expect(lastFrame()).toContain('12× GET')
     expect(lastFrame()).toContain(TOOL_LABEL)
@@ -261,17 +288,20 @@ describe('TraceView (tree-model)', () => {
   it('h in flat mode leaves a row selected — never a key flat mode does not render', async () => {
     const { db, rootId } = seedReferenceLikeTrace()
     const { lastFrame, stdin } = render(
-      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={140} />)
     await tick()
     stdin.write('f'); await tick()
     // Walk to a request that lives under a TOOL in the tree. Flat mode renders
     // no tool rows, so its structural parent key is not on screen. The walk is
     // self-locating (left-truncation may elide the marker from most tails):
     // stop when the selected row's name shows in BOTH panes.
+    // Landing means the INSPECTOR shows the row's card too. The A_SalesOrder
+    // call's 620ms duration is unique in this fixture: once in its tree TOOK
+    // cell, once in the inspector strip when its card is up.
     let landed = false
     for (let i = 0; i < 30 && !landed; i++) {
       stdin.write(DOWN); await tick(5)
-      landed = occurrences(lastFrame()!, 'A_SalesOrder') > 1
+      landed = occurrences(lastFrame()!, '620ms') >= 2
     }
     expect(landed).toBe(true)
 
@@ -300,7 +330,7 @@ describe('TraceView (tree-model)', () => {
     })])
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
     const { lastFrame } = render(
-      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={140} />)
     await tick()
     const f = lastFrame()!
     // Leaf and root must agree: the input side was never reported.
@@ -311,7 +341,7 @@ describe('TraceView (tree-model)', () => {
   it('pruned trace renders the pruned message, not the expired one', async () => {
     const { db } = seedDb()
     const { lastFrame } = render(
-      <TraceView db={db} traceId={777777} columns={140} onBack={noop} />)
+      <Harness db={db} traceId={777777} columns={140} />)
     await tick()
     expect(lastFrame()).toContain('no longer in the database')
   })
@@ -321,7 +351,7 @@ describe('TraceView (tree-model)', () => {
   it('⏎ re-collapses an open fold, and h on an open fold header collapses it in place (Finding 1)', async () => {
     const { db, rootId } = seedReferenceLikeTrace()
     const { lastFrame, stdin } = render(
-      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={140} />)
     await tick()
     stdin.write(DOWN); await tick()     // root -> fold
 
@@ -368,7 +398,7 @@ describe('TraceView (tree-model)', () => {
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
 
     const { lastFrame, stdin } = render(
-      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={140} />)
     await tick()
     stdin.write(DOWN); await tick()     // root -> first-call (the last row)
     expect(occurrences(lastFrame()!, '/first-call')).toBe(2)   // tree row + detail card
@@ -416,7 +446,7 @@ describe('TraceView (tree-model)', () => {
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
 
     const { lastFrame, stdin } = render(
-      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={140} />)
     await tick()
     // Pure cursor moves, no rows change in between — this is what must be
     // tracked continuously, not only when `rows` itself changes.
@@ -439,20 +469,43 @@ describe('TraceView (tree-model)', () => {
     expect(lastFrame()).toContain('tokens  10 → 5')
   })
 
-  it('single-pane STEP width is columns - 34 per spec §2.5 (Finding 4)', () => {
-    expect(computeLayout(140).stepWidth).toBe(53)          // two-pane regression
-    expect(computeLayout(90).twoPane).toBe(false)
-    expect(computeLayout(90).stepWidth).toBe(56)            // 90 - 34
+  it('workspace layout spends every cell exactly once; tree columns shed as units', () => {
+    // Pane widths plus dividers must equal the input at every boundary width.
+    for (const w of [80, 90, 109, 110, 140, 159, 160, 200]) {
+      const l = workspaceLayout(w)
+      const sum = (l.list ?? 0) + l.tree + (l.inspector ?? 0) + l.dividers
+      expect(sum, `columns ${w}`).toBe(w)
+    }
+    expect(workspaceLayout(109).mode).toBe('narrow')
+    expect(workspaceLayout(110).mode).toBe('medium')
+    expect(workspaceLayout(159).mode).toBe('medium')
+    expect(workspaceLayout(160).mode).toBe('wide')
+
+    // Optional numeric columns disappear whole — TOKENS first, then COST;
+    // STEP and TOOK always survive.
+    expect(treeColumns(84)).toMatchObject({ cost: true, tokens: true })
+    expect(treeColumns(50)).toMatchObject({ cost: true, tokens: false })
+    expect(treeColumns(36)).toMatchObject({ cost: false, tokens: false })
+    for (const w of [36, 50, 84, 120]) {
+      const c = treeColumns(w)
+      const used = c.stepWidth + (c.cost ? 10 : 0) + (c.tokens ? 14 : 0) + 9
+      expect(used, `tree width ${w}`).toBeLessThanOrEqual(w)
+    }
   })
 
   // --- task 16: footer context, payload-as-child, live/incomplete states ---
 
-  it('claims the footer per state: tree, flat, payload, pruned (spec §4)', async () => {
-    const { db, rootId } = seedReferenceLikeTrace()
+  it('the workspace claims the footer per state: list, tree, flat, payload (spec §4)', async () => {
+    const { db } = seedReferenceLikeTrace()
     const { footer, Provider } = footerCapture()
     const { stdin } = render(
-      <Provider><TraceView db={db} traceId={rootId} columns={140} onBack={noop} /></Provider>)
+      <Provider>
+        <TraceListScreen db={db} viewport={{ columns: 140, rows: 30 }} onOpenRequest={noop} />
+      </Provider>)
     await tick()
+    expect(footer()).toContain('⏎ open trace')
+
+    stdin.write('\r'); await tick()         // list -> tree
     expect(footer()).toContain('h/l fold')
     expect(footer()).toContain('⏎ open')
     expect(footer()).not.toContain('f tree')
@@ -463,25 +516,18 @@ describe('TraceView (tree-model)', () => {
 
     stdin.write(DOWN); await tick()         // root -> first request row (flat = requests only)
     stdin.write('\r'); await tick()         // -> payload
-    expect(footer()).toBe(`${NAV} · esc back`)
+    expect(footer()).toContain('esc back')
+    expect(footer()).toContain('↑↓ scroll')
     expect(footer()).not.toContain('h/l fold')
 
     stdin.write(ESC); await tick()          // payload -> tree, still flat
     expect(footer()).toContain('f tree')
   })
 
-  it('a pruned trace claims the pruned footer', async () => {
-    const { db } = seedDb()
-    const { footer, Provider } = footerCapture()
-    render(<Provider><TraceView db={db} traceId={777777} columns={140} onBack={noop} /></Provider>)
-    await tick()
-    expect(footer()).toBe('q quit · esc back')
-  })
-
   it('⏎ on an LLM leaf opens its payload in place; esc returns to the tree on the same row', async () => {
     const { db, rootId } = seedReferenceLikeTrace()
     const { lastFrame, stdin } = render(
-      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={140} />)
     await tick()
     stdin.write(DOWN); await tick()   // root -> fold
     stdin.write(DOWN); await tick()   // fold -> turn #1 (an LLM leaf)
@@ -517,7 +563,7 @@ describe('TraceView (tree-model)', () => {
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
 
     const { lastFrame } = render(
-      <TraceView db={db} traceId={rootId} columns={140} now={T0 + 9000} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={140} now={T0 + 9000} />)
     await tick()
     expect(lastFrame()).toContain('● LIVE')
     expect(lastFrame()).toContain('9s…')
@@ -535,7 +581,7 @@ describe('TraceView (tree-model)', () => {
     const rootId = db.prepare(`SELECT id FROM traces WHERE parent_id IS NULL`).get().id
 
     const { lastFrame, stdin } = render(
-      <TraceView db={db} traceId={rootId} columns={140} now={T0 + 1000} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={140} now={T0 + 1000} />)
     await tick()
     expect(lastFrame()).toContain('waiting for first call')
     expect(lastFrame()).not.toContain('expired')
@@ -572,7 +618,7 @@ describe('TraceView (tree-model)', () => {
     // Single-pane (< 110 cols): the tree is the whole frame, so the root's
     // line ends at its own TOOK cell — no adjacent detail-pane box to bleed
     // into the trailing text the way two-pane's side-by-side row would.
-    const { lastFrame } = render(<TraceView db={db} traceId={rootId} columns={100} onBack={noop} />)
+    const { lastFrame } = render(<Harness db={db} traceId={rootId} columns={100} />)
     await tick()
     const rootLine = lastFrame()!.split('\n').find((l) => l.includes('GET /stream'))!
     expect(rootLine).toContain('⚠ incomplete')
@@ -583,7 +629,7 @@ describe('TraceView (tree-model)', () => {
   it('state survives a resize across the 110-column two-pane threshold (140 -> 100 -> 140)', async () => {
     const { db, rootId } = seedReferenceLikeTrace()
     const { lastFrame, stdin, rerender } = render(
-      <TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+      <Harness db={db} traceId={rootId} columns={140} />)
     await tick()
     stdin.write(DOWN); await tick()     // root -> fold
     stdin.write('\r'); await tick()     // expand the fold in place
@@ -592,29 +638,30 @@ describe('TraceView (tree-model)', () => {
 
     // Below 110: single-pane layout, but the same tree state (rows/expansion
     // are computed the same way regardless of layout — only the columns swap).
-    rerender(<TraceView db={db} traceId={rootId} columns={100} onBack={noop} />)
+    rerender(<Harness db={db} traceId={rootId} columns={100} />)
     await tick()
-    expect(lastFrame()).not.toContain('╭')          // single-pane: no detail box
+    expect(lastFrame()).not.toContain('DETAIL')      // single-pane: no inspector
     expect(lastFrame()).toContain('MATERIAL_STOCK')  // the fold is still open
     expect(lastFrame()).toContain('▾')
 
     // Open the payload while narrow, to prove THAT survives the resize too.
     // (`seedReferenceLikeTrace` writes with `capturePayloads: false`, so the
     // payload screen's own "no body" message is the marker, not a body
-    // section — `waterfall:` is unconditional either way.)
+    // section — the Summary tab's `waterfall` line is unconditional either way.)
     stdin.write(DOWN); await tick()
     stdin.write('\r'); await tick()
-    expect(lastFrame()).toContain('waterfall:')
+    expect(lastFrame()).toContain('waterfall')
     expect(lastFrame()).not.toContain('▾')
 
-    rerender(<TraceView db={db} traceId={rootId} columns={140} onBack={noop} />)
+    rerender(<Harness db={db} traceId={rootId} columns={140} />)
     await tick()
     // still the payload, now rendered at the wider layout
-    expect(lastFrame()).toContain('waterfall:')
+    expect(lastFrame()).toContain('waterfall')
 
     stdin.write(ESC); await tick()
-    // back on the tree, at 140 again, fold still expanded
-    expect(lastFrame()).toContain('╭')
+    // back on the tree, at 140 again, fold still expanded — and the inspector
+    // pane is back beside it
+    expect(lastFrame()).toContain('DETAIL')
     expect(lastFrame()).toContain('MATERIAL_STOCK')
   })
 })

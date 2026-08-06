@@ -283,34 +283,31 @@ describe('TraceDetail — LLM card', () => {
     expect(dur!.color).toBeUndefined()
   })
 
-  it('shrinks in the spec order on a short terminal, keeping real USER and ASSISTANT text', () => {
+  it('keeps real USER and ASSISTANT text in the scrollable body', () => {
+    // The inspector is now a full-height scrolling pane — nothing shrinks away;
+    // a short viewport bounds the visible slice instead (next test).
     const { db, rootId } = seedTrace()
     const { rows, nodes } = viewOf(db, rootId)
-    const f = frame(llmRow(rows), db, nodes, 60, 14)
-    expect(f).not.toContain('earlier messages')          // marker dropped
-    expect(f).not.toContain('You are an SAP')            // system dropped first
+    const f = frame(llmRow(rows), db, nodes, 60, 40)
     expect(f).toContain('USER')
     expect(f).toContain('ASSISTANT')
-    // A label over a `+N more` count is the empty panel reborn: the surviving
-    // line has to be CONTENT.
     expect(f).toContain('how many sales orders')
     expect(f).toContain('I found 42 sales orders')
-    expect(f).not.toMatch(/(USER|ASSISTANT)\s*\n\s*\+\d+ more/)
-    expect(f).toContain('tokens  46,802 → 846')          // the strip never shrinks
+    expect(f).toContain('tokens  46,802 → 846')
   })
 
-  it('fits inside the spec height budget C = max(12, rows − 12) − 5', () => {
+  it('never renders more rows than the pane height plus its own header', () => {
     const { db, rootId } = seedTrace()
     const { rows, nodes } = viewOf(db, rootId)
     const cards: Array<[string, DisplayRow | undefined]> = [
       ['root', rows[0]], ['fold', foldRow(rows)], ['llm', llmRow(rows)],
       ['tool', toolRow(rows)], ['api', apiRow(rows, 'A_SalesOrder')],
     ]
-    for (const height of [14, 24, 40]) {
-      const C = Math.max(12, height - 12) - 5
+    for (const height of [6, 14, 24]) {
       for (const [name, row] of cards) {
-        const body = frame(row, db, nodes, 60, height).split('\n').length - 2   // minus both borders
-        expect(body, `${name} @${height}: ${body} lines, budget ${C}`).toBeLessThanOrEqual(C)
+        const total = frame(row, db, nodes, 60, height).split('\n').length
+        // DETAIL header + title + body slice — never more than height + 1.
+        expect(total, `${name} @${height}: ${total} lines`).toBeLessThanOrEqual(height + 1)
       }
     }
   })
@@ -510,33 +507,25 @@ describe('TraceDetail — trace root card', () => {
   })
 })
 
-describe('TraceDetail — card priorities under a short terminal (spec §3)', () => {
-  // 24 rows: B = max(12, 24 − 12) = 12, content C = 7 — fewer lines than the
-  // root card wants, so something must yield. The comment on `fitCard` names
-  // what: elaboration first, and `issues` is never elaboration.
-  const SHORT = 24
-
-  it('sheds composition/slowest/costliest before the issues line', () => {
+describe('TraceDetail — full-height inspector pane (workspace spec)', () => {
+  it('the root card keeps issues AND its elaboration — the pane scrolls instead of shedding', () => {
     const { db, rootId } = seedTrace()
     const { rows, nodes } = viewOf(db, rootId)
-    const f = frame(rows[0], db, nodes, 60, SHORT)
+    const f = frame(rows[0], db, nodes, 60, 40)
     expect(f).toContain('issues')
-    expect(f).not.toContain('slowest')
-    expect(f).not.toContain('costliest')
+    expect(f).toContain('slowest')
+    expect(f).toContain('costliest')
   })
 
   it('offers ⏎ only on a row that actually has a payload to open', () => {
     const { db, rootId } = seedTrace()
     const { rows, nodes } = viewOf(db, rootId)
-    // The root is a trace, not a request — there is no payload behind ⏎, so
-    // the hint must never appear on it (whether or not the card truncates;
-    // with elaboration marked optional it usually fits outright now).
-    const root = frame(rows[0], db, nodes, 60, SHORT)
-    expect(root).not.toContain('⏎ opens the payload')
-    expect(root).toContain('issues')
+    // The root is a trace, not a request — there is no payload behind ⏎.
+    const root = frame(rows[0], db, nodes, 60, 40)
+    expect(root).not.toContain('⏎ full payload')
     // A request row does have one, and says so.
-    const api = frame(apiRow(rows, 'A_SalesOrder'), db, nodes, 60, SHORT)
-    expect(api).toContain('⏎ opens the payload')
+    const api = frame(apiRow(rows, 'A_SalesOrder'), db, nodes, 60, 40)
+    expect(api).toContain('⏎ full payload')
   })
 })
 

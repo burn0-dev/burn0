@@ -2,100 +2,80 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import { query, type StorageDriver } from '@burn0/core'
 import type { TraceTreeNode } from '@burn0/core'
-import { usePoll, useTermSize } from '../hooks.js'
+import { usePoll } from '../hooks.js'
 import { theme } from '../theme.js'
-import { NAV, useFooter } from '../footer.js'
 import { buildRows, rowKey, type DisplayRow } from '../tree-model.js'
+import {
+  treeColumns, COST_W, TOKENS_W, TOOK_W, type TreeColumns,
+} from '../workspace-layout.js'
 import { TraceDetail } from './TraceDetail.js'
-import { DebugScreen } from './Debug.js'
 
-/** Two-pane trace view: tree on the left, detail following the selection on the
- *  right. Ink has no layout query, so the width branch is manual — below this,
- *  the detail pane squeezes the tree into unreadability and single-pane wins. */
+/** The execution tree plus (when given an inspector width) the selected-node
+ *  inspector — the middle and right panes of the LLM workspace. The parent
+ *  (`TraceList`) owns pane FOCUS and total geometry; this component owns tree
+ *  UI state, keyed per trace via the `cache` ref so switching traces in wide
+ *  mode (or opening a request detail) never loses folds or the cursor. */
+
+// Kept as a named export: the old two-pane branch point, still pinned by tests
+// and now defined in terms of the shared workspace layout.
 export const TWO_PANE_MIN_COLUMNS = 110
 
-// STEP takes what is left after the three numeric columns and their gaps —
-// verified against the spec's own numbers: 140 cols → pane 86 → STEP 53.
-const COST_W = 8
-const TOKENS_W = 12
-const TOOK_W = 7
 const GAP = '  '
 
-// One footer string per state (spec §4's tree / flat / payload / pruned) —
-// `useFooter` below claims the line App renders; this screen no longer paints
-// its own (that was the double-footer bug: App's stale tab-2 default sat
-// above this screen's accurate one).
-const FOOTER_TREE = `${NAV} · ↑↓ move · h/l fold · ⏎ open · f flat · esc back`
-const FOOTER_FLAT = `${NAV} · ↑↓ move · h/l fold · ⏎ open · f tree · esc back`
-const FOOTER_PAYLOAD = `${NAV} · esc back`
-const FOOTER_PRUNED = 'q quit · esc back'
-
-/** Pane math, pulled out pure so both the component and a regression test can
- *  pin it: two-pane's `pane` is 0.62 of `columns` (capped 98); single-pane
- *  gives the tree pane the whole row bar a 1-column margin — spec §2.5's own
- *  worked numbers are 140 cols → STEP 53 (two-pane) and `columns - 34`
- *  (single-pane), the latter only reachable with margin 1, not 2. */
-export function computeLayout(columns: number): {
-  twoPane: boolean; paneWidth: number; detailWidth: number; stepWidth: number
-} {
-  const twoPane = columns >= TWO_PANE_MIN_COLUMNS
-  const paneWidth = twoPane ? Math.min(Math.floor(columns * 0.62), 98) : columns - 1
-  const detailWidth = columns - paneWidth - 2
-  const stepWidth = Math.max(1, paneWidth - (COST_W + TOKENS_W + TOOK_W + 6))
-  return { twoPane, paneWidth, detailWidth, stepWidth }
+export interface TreeUiState {
+  expanded: Set<string>
+  collapsed: Set<string>
+  flat: boolean
+  cursorKey: string | null
 }
 
-export function TraceView({ db, traceId, columns: forced, now: forcedNow, onBack }: {
+export function TraceView({
+  db, traceId, width, height, treeWidth, inspectorWidth, focus, now: forcedNow, cache, onOpenRequest, onFold,
+}: {
   db: StorageDriver
   traceId: number
-  /** Override for tests and for callers that already measured. */
-  columns?: number
-  /** Override for tests — the clock `● LIVE`'s elapsed figure is measured
-   *  against (spec §4). Defaults to the wall clock. */
+  /** Total cells this component owns (tree + divider + inspector). */
+  width: number
+  /** Content rows available for tree rows (below the pane/table headers). */
+  height: number
+  treeWidth: number
+  /** null = single-pane (narrow): no inspector, no divider. */
+  inspectorWidth: number | null
+  /** Which pane the parent routed the keyboard to. 'none' = keys elsewhere. */
+  focus: 'tree' | 'inspector' | 'none'
   now?: number
-  onBack: () => void
+  cache?: React.MutableRefObject<Map<number, TreeUiState>>
+  onOpenRequest: (id: number) => void
+  /** Reports flat-mode so the parent's footer can describe `f` accurately. */
+  onFold?: (flat: boolean) => void
 }) {
-  const term = useTermSize()
-  const columns = forced ?? term.columns
   const tree = usePoll(() => query.traceTree(db, traceId), 1000, [traceId])
   const nodes = tree?.nodes ?? []
 
-  const [expanded, setExpanded] = useState(() => new Set<string>())
-  const [collapsed, setCollapsed] = useState(() => new Set<string>())
-  const [flat, setFlat] = useState(false)
-  const [cursorKey, setCursorKey] = useState<string | null>(null)
-  // The payload screen as a child state (spec §4): `esc` unwinds it without
-  // unmounting anything above, so `expanded`/`collapsed`/`cursorKey` are all
-  // still exactly what they were. This replaces the old App-level
-  // `selectedRequestId` swap for everything opened from inside this tree —
-  // that swap remounted the whole screen stack on the way back, which is
-  // what lost the tree in the first place.
-  const [openRequestId, setOpenRequestId] = useState<number | null>(null)
+  const cached = cache?.current.get(traceId)
+  const [expanded, setExpanded] = useState(() => cached?.expanded ?? new Set<string>())
+  const [collapsed, setCollapsed] = useState(() => cached?.collapsed ?? new Set<string>())
+  const [flat, setFlat] = useState(cached?.flat ?? false)
+  const [cursorKey, setCursorKey] = useState<string | null>(cached?.cursorKey ?? null)
 
-  const { twoPane, paneWidth, detailWidth, stepWidth } = computeLayout(columns)
+  // Write-through cache: whatever this trace's UI state is now is what a
+  // remount (trace switch, request detail round-trip) starts from.
+  useEffect(() => {
+    cache?.current.set(traceId, { expanded, collapsed, flat, cursorKey })
+  }, [traceId, expanded, collapsed, flat, cursorKey, cache])
+  useEffect(() => { onFold?.(flat) }, [flat, onFold])
+
+  const cols: TreeColumns = treeColumns(treeWidth)
 
   const rows = useMemo(
-    () => (tree ? buildRows({ tree, expanded, collapsed, stepWidth, flat, now: forcedNow ?? Date.now() }) : []),
-    // `forcedNow` (not a raw `Date.now()` call) in the dep array: a fixed
-    // override must never re-trigger this memo, and a live clock's own
-    // "freshness" already comes from `tree`'s identity changing on every 1s
-    // poll tick — this only needs to grab a current timestamp when it was
-    // about to recompute anyway.
-    [tree, expanded, collapsed, stepWidth, flat, forcedNow],
+    () => (tree ? buildRows({ tree, expanded, collapsed, stepWidth: cols.stepWidth, flat, now: forcedNow ?? Date.now() }) : []),
+    [tree, expanded, collapsed, cols.stepWidth, flat, forcedNow],
   )
 
-  // Cursor resolution, run whenever `rows` itself changes (a poll rebuilding
-  // the tree, or the user's own h/l/f changing what's visible) — precedence
-  // matters:
-  //   1. was the cursor on the LAST row before this change? Follow to the new
-  //      last row, unconditionally. This must outrank identity: the row the
-  //      cursor was on may still exist (just no longer last), and a live
-  //      trace should keep tailing it regardless.
-  //   2. otherwise, does the same key still exist? Keep it.
-  //   3. otherwise, clamp to the nearest valid index.
-  // `prevIndexRef`/`prevRowsRef` are NOT only updated here — see the tracking
-  // effect below, which is what keeps "previous position" honest across pure
-  // cursor moves (arrow keys) that never touch `rows` at all.
+  // Cursor resolution across `rows` changes — precedence: (1) was on the last
+  // row → follow to the new last row; (2) same key still exists → keep it;
+  // (3) clamp to the nearest valid index. A fresh mount restores the cached
+  // key when it still exists rather than snapping to the root.
   const prevRowsRef = useRef<DisplayRow[]>([])
   const prevIndexRef = useRef<number>(-1)
   useEffect(() => {
@@ -105,7 +85,8 @@ export function TraceView({ db, traceId, columns: forced, now: forcedNow, onBack
     if (rows.length === 0) {
       idx = -1
     } else if (prevRows.length === 0) {
-      idx = 0
+      const found = cursorKey == null ? -1 : rows.findIndex((r) => r.key === cursorKey)
+      idx = found !== -1 ? found : 0
     } else if (prevIndex === prevRows.length - 1) {
       idx = rows.length - 1                                     // was last -> follow
     } else {
@@ -117,18 +98,15 @@ export function TraceView({ db, traceId, columns: forced, now: forcedNow, onBack
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows])
 
-  // Keep a live snapshot of "where the cursor is right now" after every
-  // render — not only after a `rows` change — so the effect above always
-  // resolves against the freshest position. Declared after the resolution
-  // effect so, within one commit, resolution reads last render's snapshot
-  // before this one overwrites it with the current render's.
+  // Fresh snapshot of the cursor position after EVERY render, so the effect
+  // above always resolves against where the cursor actually was.
   useEffect(() => {
     prevRowsRef.current = rows
     prevIndexRef.current = rows.length > 0 ? rows.findIndex((r) => r.key === cursorKey) : -1
   })
 
   const at = Math.max(0, rows.findIndex((r) => r.key === cursorKey))
-  const maxRows = Math.max(3, term.rows - 10)
+  const maxRows = Math.max(3, height)
   const start = at < maxRows ? 0 : Math.min(at - maxRows + 1, Math.max(0, rows.length - maxRows))
 
   const openRow = (key: string) => {
@@ -145,14 +123,7 @@ export function TraceView({ db, traceId, columns: forced, now: forcedNow, onBack
   }
 
   useInput((input, key) => {
-    // The payload screen owns nothing but `esc`: every tree key (arrows,
-    // h/l/f/⏎) belongs to the row that was selected before it opened, and
-    // must not touch `expanded`/`collapsed`/`cursorKey` while it's up.
-    if (openRequestId != null) {
-      if (key.escape) setOpenRequestId(null)
-      return
-    }
-    if (key.escape) { onBack(); return }
+    if (focus !== 'tree') return           // parent routed the keys elsewhere
     if (rows.length === 0) return
 
     if (key.upArrow) {
@@ -165,16 +136,15 @@ export function TraceView({ db, traceId, columns: forced, now: forcedNow, onBack
       setCursorKey(rows[idx]?.key ?? null)
       return
     }
+    if (key.pageUp) { setCursorKey(rows[Math.max(0, at - maxRows)]?.key ?? null); return }
+    if (key.pageDown) { setCursorKey(rows[Math.min(rows.length - 1, at + maxRows)]?.key ?? null); return }
     if (input === 'f') { setFlat((v) => !v); return }
 
     const row = rows[at]
     if (!row) return
 
     if (key.return) {
-      // A leaf's ⏎ opens the payload in place — no fold-member exception (see
-      // Task 10's judgment call 1): a folded call's payload is not less
-      // openable than the same call unfolded.
-      if (row.requestId != null) { setOpenRequestId(row.requestId); return }
+      if (row.requestId != null) { onOpenRequest(row.requestId); return }
       if (row.isBranch) {
         if (isBranchOpen(row, rows, at, nodes, expanded, collapsed)) closeRow(row.key)
         else openRow(row.key)
@@ -185,9 +155,6 @@ export function TraceView({ db, traceId, columns: forced, now: forcedNow, onBack
       if (row.isBranch && isBranchOpen(row, rows, at, nodes, expanded, collapsed)) {
         closeRow(row.key)
       } else {
-        // Only jump to a parent the current mode actually renders — flat mode
-        // has no structure rows, so a structural parent key would deselect
-        // everything until the next poll (final-review F7).
         const pk = parentKeyOf(row, nodes)
         if (pk != null && rows.some((r) => r.key === pk)) setCursorKey(pk)
       }
@@ -199,18 +166,10 @@ export function TraceView({ db, traceId, columns: forced, now: forcedNow, onBack
     }
   })
 
-  // One `useFooter` call, unconditional (rules of hooks), covering all four
-  // states — must run before the pruned early return below, or the hook
-  // count would differ between renders.
-  const footerText = tree === null ? FOOTER_PRUNED
-    : openRequestId != null ? FOOTER_PAYLOAD
-      : flat ? FOOTER_FLAT : FOOTER_TREE
-  useFooter(footerText)
-
   if (tree === null) {
     return (
-      <Box flexDirection="column">
-        <Text color={theme.warn}>
+      <Box flexDirection="column" width={width}>
+        <Text color={theme.warn} wrap="truncate">
           Trace no longer in the database — pruned by retention while you were viewing it.
         </Text>
         <Text dimColor>esc returns to the list.</Text>
@@ -218,60 +177,89 @@ export function TraceView({ db, traceId, columns: forced, now: forcedNow, onBack
     )
   }
 
-  if (openRequestId != null) {
-    return <DebugScreen db={db} requestId={openRequestId} />
-  }
-
   const selected = rows[at]
 
   const treePane = (
-    <Box flexDirection="column" width={twoPane ? paneWidth : undefined}>
-      <TreeHeader stepWidth={stepWidth} />
+    <Box flexDirection="column" width={treeWidth}>
+      <TreeHeader cols={cols} focused={focus === 'tree'} />
       {rows.slice(start, start + maxRows).map((r) => (
-        <TreeRow key={r.key} row={r} selected={r.key === cursorKey} />
+        <TreeRow key={r.key} row={r} cols={cols} selected={r.key === cursorKey} focused={focus === 'tree'} />
       ))}
     </Box>
   )
 
-  return twoPane ? (
-    // The width is stated, not inherited: the tree pane is sized from
-    // `columns`, so the container must be laid out against the same number or
-    // the detail pane silently gets whatever is left of a different width.
-    <Box gap={2} width={columns}>
+  if (inspectorWidth == null) return <Box width={width}>{treePane}</Box>
+
+  return (
+    <Box width={width}>
       {treePane}
-      <Box flexDirection="column" width={detailWidth}>
-        <TraceDetail
-          row={selected} nodes={nodes} db={db}
-          width={detailWidth} height={term.rows} now={forcedNow}
-        />
-      </Box>
+      <PaneDivider rows={height + 1} />
+      <TraceDetail
+        row={selected} nodes={nodes} db={db}
+        width={inspectorWidth} height={height}
+        focused={focus === 'inspector'}
+        now={forcedNow}
+        onOpenRequest={onOpenRequest}
+      />
     </Box>
-  ) : treePane
+  )
+}
+
+/** One dim 1-cell vertical rule spanning the pane height (headers included). */
+export function PaneDivider({ rows }: { rows: number }) {
+  return (
+    <Box flexDirection="column" width={1}>
+      {Array.from({ length: Math.max(1, rows) }, (_, i) => (
+        <Text key={i} color={theme.rule}>│</Text>
+      ))}
+    </Box>
+  )
 }
 
 // ---------------------------------------------------------------------------
 // Row rendering — DisplayRow.step arrives PRE-COMPOSED to exactly `stepWidth`
-// display cells (surrogate-pair safe). Re-running it through ui.tsx's `fit()`
-// would right-truncate it a second time and could shear the 🔧 glyph, so
-// these rows are rendered directly instead of through TableRow.
+// display cells (surrogate-pair safe); numeric cells are ASCII and pad with
+// String.padStart safely. Optional columns render whole or not at all — the
+// header and the values make the same visibility decision (`TreeColumns`).
 // ---------------------------------------------------------------------------
 
-function TreeHeader({ stepWidth }: { stepWidth: number }) {
+function TreeHeader({ cols, focused }: { cols: TreeColumns; focused: boolean }) {
   return (
-    <Text dimColor wrap="truncate">
-      {'STEP'.padEnd(stepWidth)}{GAP}{'COST'.padStart(COST_W)}{GAP}{'TOKENS'.padStart(TOKENS_W)}{GAP}{'TOOK'.padStart(TOOK_W)}
+    <Text wrap="truncate">
+      <Text bold color={focused ? theme.accentSoft : undefined} dimColor={!focused}>
+        {'EXECUTION'.padEnd(cols.stepWidth)}
+      </Text>
+      <Text dimColor>
+        {cols.cost ? `${GAP}${'COST'.padStart(COST_W)}` : ''}
+        {cols.tokens ? `${GAP}${'TOKENS'.padStart(TOKENS_W)}` : ''}
+        {`${GAP}${'TOOK'.padStart(TOOK_W)}`}
+      </Text>
     </Text>
   )
 }
 
-function TreeRow({ row, selected }: { row: DisplayRow; selected: boolean }) {
+/** Selection is ONE continuous background across the whole row — never per-cell
+ *  inverse video, which painted orange/magenta/green/yellow blocks. Semantic
+ *  foreground colors stay; they remain legible on the warm dark tint. */
+function TreeRow({ row, cols, selected, focused }: {
+  row: DisplayRow; cols: TreeColumns; selected: boolean; focused: boolean
+}) {
+  const bg = selected ? (focused ? theme.selBg : theme.selBgInactive) : undefined
   return (
-    <Text inverse={selected} wrap="truncate">
+    <Text backgroundColor={bg} wrap="truncate">
       <Text color={row.stepColor} bold={row.stepBold} dimColor={row.stepDim}>{row.step}</Text>
-      <Text>{GAP}</Text>
-      <Text color={theme.cost}>{row.cost.padStart(COST_W)}</Text>
-      <Text>{GAP}</Text>
-      <Text dimColor>{row.tokens.padStart(TOKENS_W)}</Text>
+      {cols.cost && (
+        <>
+          <Text>{GAP}</Text>
+          <Text color={theme.cost}>{row.cost.padStart(COST_W)}</Text>
+        </>
+      )}
+      {cols.tokens && (
+        <>
+          <Text>{GAP}</Text>
+          <Text dimColor>{row.tokens.padStart(TOKENS_W)}</Text>
+        </>
+      )}
       <Text>{GAP}</Text>
       <Text
         dimColor={row.tookEmphasis === 'dim'}
@@ -285,15 +273,12 @@ function TreeRow({ row, selected }: { row: DisplayRow; selected: boolean }) {
 
 // ---------------------------------------------------------------------------
 // Navigation helpers — derived from the rendered `rows` array and the raw
-// `nodes`, never from tree-model internals (`isOpen`/`isFoldOpen` are not
-// exported, and do not need to be: whether a branch is showing its children
-// is fully observable from what actually rendered).
+// `nodes`, never from tree-model internals.
 // ---------------------------------------------------------------------------
 
 /** The structural nesting depth of a row — the same scale as `node.depth`,
  *  whether the row is a plain node, a fold (its members' depth), or an info
- *  row (one past its owning node's depth, since it renders as that node's
- *  first child). */
+ *  row (one past its owning node's depth). */
 function structuralDepth(row: DisplayRow, nodes: TraceTreeNode[]): number {
   if (row.kind === 'node') return row.node!.depth
   if (row.kind === 'fold') return row.members![0].depth
@@ -304,22 +289,14 @@ function structuralDepth(row: DisplayRow, nodes: TraceTreeNode[]): number {
 }
 
 /** A node branch (trace/tool) is currently open iff the very next row is one
- *  of its children — depth exactly one past its own. This does NOT hold for
- *  folds: a fold's members render at the SAME `node.depth` as the fold header
- *  (only their guide prefix deepens visually), so this check alone always
- *  reads an open fold as closed. Use `isBranchOpen` at call sites — it is the
- *  one that knows the difference. */
+ *  of its children — depth exactly one past its own. Does NOT hold for folds
+ *  (their members render at the same depth); use `isBranchOpen`. */
 function isRowExpanded(rows: DisplayRow[], idx: number, nodes: TraceTreeNode[]): boolean {
   const next = rows[idx + 1]
   if (!next) return false
   return structuralDepth(next, nodes) === structuralDepth(rows[idx], nodes) + 1
 }
 
-/** Whether `row` (a branch — node or fold) is currently showing its children.
- *  Folds key directly off `expanded`/`collapsed` — tree-model's own
- *  `isFoldOpen` contract, which `DEFAULT_VISIBLE_DEPTH` never touches — rather
- *  than the rendered-depth heuristic `isRowExpanded` uses for node branches,
- *  which folds structurally defeat (see `isRowExpanded`'s comment). */
 function isBranchOpen(
   row: DisplayRow, rows: DisplayRow[], idx: number, nodes: TraceTreeNode[],
   expanded: Set<string>, collapsed: Set<string>,
@@ -328,10 +305,7 @@ function isBranchOpen(
   return isRowExpanded(rows, idx, nodes)
 }
 
-/** The row key of the structural parent of `row`, or null at the root.
- *  Requests are always leaves in this schema, so a folded leaf's parent is
- *  never itself inside another fold — the scan is safe over the raw DFS
- *  order without re-deriving tree-model's internal parent index. */
+/** The row key of the structural parent of `row`, or null at the root. */
 function parentKeyOf(row: DisplayRow, nodes: TraceTreeNode[]): string | null {
   if (row.key === 'info:waiting') return nodes[0] ? rowKey(nodes[0]) : null
   if (row.kind === 'info') {
@@ -348,7 +322,3 @@ function parentKeyOf(row: DisplayRow, nodes: TraceTreeNode[]): string | null {
   }
   return null
 }
-
-// The detail pane lives in `TraceDetail.tsx` — five cards, one per row type,
-// including the fold and info rows this screen's old label/value card could
-// only render as a blank.

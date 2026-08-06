@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text } from 'ink'
 import { theme } from './theme.js'
+import { visWidth, padCell } from './glyphs.js'
 
 // Column-spec table primitives. Fixed-width cells are padded, `grow` columns
 // share the remaining terminal width, so tables always span the full screen
@@ -23,9 +24,14 @@ export function colWidths(total: number, cols: ColDef[]): number[] {
   return cols.map((c) => (c.grow ? Math.max(c.width ?? 8, share) : c.width ?? 8))
 }
 
+/** DISPLAY-cell fit — `string.length` lies about CJK, emoji and combining
+ *  marks, and one wide glyph would shear every column after it. `padCell`
+ *  (glyphs.ts) is the single truncate/pad implementation for the whole TUI. */
 function fit(s: string, w: number, align: 'left' | 'right' = 'left'): string {
-  if (s.length > w) return w > 1 ? s.slice(0, w - 1) + '…' : s.slice(0, w)
-  return align === 'right' ? s.padStart(w) : s.padEnd(w)
+  const vw = visWidth(s)
+  if (vw > w) return padCell(s, w)
+  const pad = ' '.repeat(w - vw)
+  return align === 'right' ? pad + s : s + pad
 }
 
 export interface Cell {

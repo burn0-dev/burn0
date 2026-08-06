@@ -23,6 +23,8 @@ export const theme = {
   selBg: '#4a3b2a',       // selected row background — warm orange-brown, clearly
                           // heavier than the mock's #2a2725: a 1-line terminal row
                           // has no 42px height or hover cursor to carry the cue
+  selBgInactive: '#2a2725', // selection in a pane that does NOT hold keyboard
+                            // focus — visible but dimmer, per the workspace spec
 
   winBg: '#342a21',       // selected window chip background
   tabFg: '#1d130b',       // active tab text on orange
